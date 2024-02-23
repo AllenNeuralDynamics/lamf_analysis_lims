@@ -28,12 +28,14 @@ if __name__ == '__main__':
 
     #####################
     # osids to run    
-    osid_list = []  # noqa: E501
+    osid_table = job_dir / 'multiplane_zdrift_osids_240222.csv'
+    osid_df = pd.read_csv(osid_table)
+    osids = osid_df['ophys_session_id'].values
         
     job_count = 0
 
     rerun = False
-    for osid in osid_list:
+    for osid in osids:
         job_count += 1
         print('starting cluster job for {}, job count = {}'.format(osid, job_count))  # noqa: E501
         job_title = 'osid_{}'.format(osid)
@@ -55,7 +57,7 @@ if __name__ == '__main__':
 
         #####################
         # Argument string - need space between arguments
-        args_string = f'{osid}'
+        args_string = f'--osid {osid}'
 
         slurm.sbatch('{} {} {}'.format(
                 python_executable,

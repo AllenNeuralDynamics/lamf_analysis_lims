@@ -36,4 +36,6 @@ if __name__ == '__main__':
         pool.starmap(save_experiment_zdrift, [(oeid, save_dir) for oeid in oeids])
     # oeid = oeids[1]
     # save_experiment_zdrift(oeid, save_dir)
+    t1 = time.time()
+    print(f'total time = {(t1 - t0)/60:.1f} minutes')
     
