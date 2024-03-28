@@ -18,7 +18,8 @@ parser.add_argument(
 )
 
 def save_experiment_zdrift(oeid, save_dir):
-    _ = dem.get_experiment_zdrift(oeid, ref_oeid=oeid, save_dir=save_dir)
+    _ = dem.get_experiment_zdrift(oeid, ref_oeid=oeid, save_dir=save_dir, rerun=False)
+    _ = dem.get_experiment_zdrift_first_last(oeid, ref_oeid=oeid, save_dir=save_dir, rerun=False)
 
 if __name__ == '__main__':
     t0 = time.time()
