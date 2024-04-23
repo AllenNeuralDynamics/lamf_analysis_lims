@@ -57,6 +57,57 @@ def read_si_stack_metadata(zstack_fn):
     return si_metadata
 
 
+def maxproj_reg_plane(images):
+    """Get mean FOV of a plane after registration.
+    Use phase correlation
+
+    Parameters
+    ----------
+    images : np.ndarray (3D)
+        frames from a plane
+
+    Returns
+    -------
+    np.ndarray (2D)
+        mean FOV of a plane after registration.
+    """
+    # ref_img = np.mean(images, axis=0)
+    ref_img, _ = pick_initial_reference(images)
+    reg = np.zeros_like(images)
+    shift_all = []
+    for i in range(images.shape[0]):
+        shift, _, _ = skimage.registration.phase_cross_correlation(
+            ref_img, images[i, :, :], normalization=None)
+        reg[i, :, :] = scipy.ndimage.shift(images[i, :, :], shift)
+        shift_all.append(shift)
+    return np.max(reg, axis=0), shift_all
+
+
+def maxproj_reg_plane_using_shift_info(images, shift_all):
+    """Get mean FOV of a plane after registration using pre-calculated shifts.
+    Resulting image is not filtered.
+
+    Parameters
+    ----------
+    images : np.ndarray (3D)
+        frames from a plane
+    shift_all : list
+        list of shifts between neighboring frames.
+        The length should be the same as the number of frames of images (shape[0]).
+
+    Returns
+    -------
+    np.ndarray (2D)
+        mean FOV of a plane after registration.
+    """
+    num_planes = images.shape[0]
+    assert len(shift_all) == num_planes
+    reg = np.zeros_like(images)
+    for i in range(num_planes):
+        reg[i, :, :] = scipy.ndimage.shift(images[i, :, :], shift_all[i])
+    return np.max(reg, axis=0)
+
+
 def average_reg_plane(images):
     """Get mean FOV of a plane after registration.
     Use phase correlation
