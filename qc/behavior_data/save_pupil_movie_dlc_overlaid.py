@@ -4,6 +4,17 @@ from pathlib import Path
 from matplotlib import pyplot as plt
 from brain_observatory_analysis.behavior.video_qc import annotation_tools
 from brain_observatory_qc.data_access import from_lims
+from argparse import ArgumentParser
+import time
+
+parser = ArgumentParser(description='arguments for multiplane z-drift calculation')
+parser.add_argument(
+    '--osid',
+    type=int,
+    default=0,
+    metavar='ophys_session_id',
+    help='ophys session id'
+)
 
 
 def create_save_pupil_dlc_movie(osid, save_dir, out_fps=5, total_dur=60,
@@ -24,6 +35,9 @@ def create_save_pupil_dlc_movie(osid, save_dir, out_fps=5, total_dur=60,
     assert length == len(pupil_likelihood_df.frame_number.unique())
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     movie_path = save_dir / f'pupil_osid_{osid}.mp4'
+    if movie_path.exists():
+        # remove the existing file
+        movie_path.unlink()
 
     out_num_frames = total_dur*out_fps
     frame_nums_to_capture = np.linspace(0, length-1, out_num_frames+2).astype(int)[1:-1]
@@ -59,4 +73,12 @@ def create_save_pupil_dlc_movie(osid, save_dir, out_fps=5, total_dur=60,
         np.save(fail_save_file, failed_frames)
     
 
-
+if __name__ == "__main__":
+    t0 = time.time()
+    args = parser.parse_args()
+    osid = args.osid
+    
+    save_dir = Path(r'\\allen\programs\mindscope\workgroups\learning\qc_pupil'.replace('\\', '/'))
+    create_save_pupil_dlc_movie(osid, save_dir)
+    t1 = time.time()
+    print(f'total time = {(t1 - t0)/60:.1f} minutes')    
