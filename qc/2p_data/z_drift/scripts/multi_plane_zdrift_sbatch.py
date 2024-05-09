@@ -1,9 +1,13 @@
 import os
 import argparse
 import time
-import pandas as pd
+from allensdk.brain_observatory.behavior.behavior_project_cache import VisualBehaviorOphysProjectCache as bpc
 from simple_slurm import Slurm
 from pathlib import Path
+from datetime import datetime
+import numpy as np
+import pandas as pd
+
 
 parser = argparse.ArgumentParser(description='running sbatch for multi_plane_zdrift.py')  # noqa: E501
 parser.add_argument('--env-path', type=str, default='/home/jinho.kim/anaconda3/envs/allenhpc', metavar='path to conda environment to use')  # noqa: E501
@@ -28,19 +32,71 @@ if __name__ == '__main__':
 
     #####################
     # osids to run    
-    osid_table = job_dir / 'multiplane_zdrift_osids_240222.csv'
-    osid_df = pd.read_csv(osid_table)
-    osids = osid_df['ophys_session_id'].values
+    # osid_table = job_dir / 'multi_plane_zdrift_vb_multiscope.csv'
+    # osid_df = pd.read_csv(osid_table)
+    # osids = osid_df['ophys_session_id'].values
+
+    job_records_dir = Path(r'\allen\programs\mindscope\workgroups\learning\ophys\zdrift\job_records'.replace('\\', '/'))
+    time_since = datetime(2024, 3, 26, 0, 0, 0)
+    files = [f for f in job_records_dir.glob('**/*') if f.is_file() and f.stat().st_ctime > time_since.timestamp()]
+    failed_files = []
+    succeeded_osids = []
+    failed_osids = []
+    success_word = 'total time ='
+    for file in files:
+        with open(file, 'r') as f:
+            lines = f.readlines()
+            if np.array([success_word in l for l in lines]).any():
+                succeeded_osids.append(int(file.name.split('_')[-1].split('.')[0]))
+            else:
+                failed_files.append(file)
+                failed_osids.append(int(file.name.split('_')[-1].split('.')[0]))
+
+    # osid_table = job_dir / 'multiplane_zdrift_osids_240223.csv'
+    # osid_df = pd.read_csv(osid_table)
+    # osids = osid_df['ophys_session_id'].values
+
+    # cache = bpc.from_lims()
+    # table = cache.get_ophys_experiment_table(passed_only=False)
+    # lamf_table = table.query('project_code == "LearningmFISHTask1A"')
+    # lamf_table = lamf_table[~(lamf_table.session_type.str.contains("TRAINING_0_"))]        
+    # zdrift_test_table = lamf_table.groupby('ophys_session_id').apply(lambda x: len(x.targeted_structure.unique())<=2)
+    # osids = zdrift_test_table[zdrift_test_table].index.values
+
+    # prev_job_records_dir = Path(r'\allen\programs\mindscope\workgroups\learning\ophys\zdrift\job_records'.replace('\\', '/'))
+    # # filter by created time, if needed
+    # time_since = datetime(2024, 2, 22, 0, 0, 0)
+    # # from job_dir get files created after time_since
+    # files = [f for f in prev_job_records_dir.glob('**/*') if f.is_file() and f.stat().st_ctime > time_since.timestamp()]
+    # # read and find the ones that failed
+    # failed_osids = []
+    # success_word = 'total time ='
+    # for file in files:
+    #     with open(file, 'r') as f:
+    #         lines = f.readlines()
+    #         if np.array([success_word in l for l in lines]).any():
+    #             continue
+    #         else:
+    #             failed_osids.append(int(file.name.split('_')[-1].split('.')[0]))
+    # osids = failed_osids
+        
+    # cache = bpc.from_lims()
+    # table = cache.get_ophys_experiment_table(passed_only=False)
+    # lamf_table = table.query('project_code == "LearningmFISHTask1A"')
+    # lamf_table = lamf_table[~(lamf_table.session_type.str.contains("TRAINING_0_"))]        
+    # zdrift_test_table = lamf_table.groupby('ophys_session_id').apply(lambda x: len(x.targeted_structure.unique())==4)
+    # osids = zdrift_test_table[zdrift_test_table].index.values
+    
         
     job_count = 0
 
     rerun = False
-    for osid in osids:
+    for osid in failed_osids:
         job_count += 1
         print('starting cluster job for {}, job count = {}'.format(osid, job_count))  # noqa: E501
         job_title = 'osid_{}'.format(osid)
-        walltime = '1:00:00'
-        mem = '50gb'
+        walltime = '4:00:00'
+        mem = '100gb'
         job_id = Slurm.JOB_ARRAY_ID
         job_array_id = Slurm.JOB_ARRAY_MASTER_ID
         output = stdout_location / f'{job_array_id}_{job_id}_{osid}.out'
