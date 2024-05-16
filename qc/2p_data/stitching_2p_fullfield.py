@@ -20,11 +20,11 @@ def read_si_fullfield_metadata(fullfield_fn):
     with Image.open(fullfield_fn) as img:
         meta_dict = {TAGS[key] : img.tag[key] for key in img.tag_v2}
     
-    num_slices_ind = np.where(['SI.hStackManager.numSlices = ' in x for x in meta_dict['Software'][0].split('\n')])[0][0]
+    num_slices_ind = np.where(['SI.hStackManager.actualNumSlices = ' in x for x in meta_dict['Software'][0].split('\n')])[0][0]
     num_slices_txt = meta_dict['Software'][0].split('\n')[num_slices_ind]
     num_slices = int(num_slices_txt.split('= ')[1])
     
-    num_volumes_ind = np.where(['SI.hStackManager.numVolumes = ' in x for x in meta_dict['Software'][0].split('\n')])[0][0]
+    num_volumes_ind = np.where(['SI.hStackManager.actualNumVolumes = ' in x for x in meta_dict['Software'][0].split('\n')])[0][0]
     num_volumes_txt = meta_dict['Software'][0].split('\n')[num_volumes_ind]
     num_volumes = int(num_volumes_txt.split('= ')[1])
 
