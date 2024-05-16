@@ -39,8 +39,8 @@ def register_plane_and_save_emf(h5_fn, frame_rate=11, epoch_minutes=1, key='data
     ops['batch_size'] = 1000
     ops['maxregshift'] = 0.2
     ops['snr_thresh'] = 1.2 # Default: 1.2 # if any nonrigid block is below this threshold, it gets smoothed until above this threshold. 1.0 results in no smoothing
-    ops['block_size'] = 64
-    ops['maxregshiftNR'] = np.round(ops['block_size']/10) # Default = 5
+    ops['block_size'] = [64, 64]
+    ops['maxregshiftNR'] = np.round(ops['block_size'][0]/10) # Default = 5
 
     # Read data
     with h5py.File(h5_fn, 'r') as h5:

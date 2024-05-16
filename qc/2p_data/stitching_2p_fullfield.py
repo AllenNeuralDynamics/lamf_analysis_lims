@@ -69,3 +69,31 @@ def _stitch(fullfield, num_slices, num_columns, num_rows):
     fullfield_ = np.concatenate([fullfield_[:, i*num_rows : (i+1)*num_rows, :] for i in range(num_columns)],axis=2)
     im = fullfield_.mean(axis=0)
     return im
+
+
+def fullfield_zstack(fn):
+    ''' Make fullfield zstack
+    fn: file path
+    return
+        ff_zstack: volume-averaged fullfield z-stack
+    '''
+    num_slices, num_volumes, num_columns = read_si_fullfield_metadata(fn)
+    fullfield_all = imread(fn)
+
+    num_rows = int((fullfield_all.shape[1]+1) / num_columns)
+    ind = np.hstack([np.arange(i, fullfield_all.shape[0], num_slices) for i in range(num_slices)])
+    fullfield_ = np.concatenate([fullfield_all[ind,:,:],np.zeros((fullfield_all.shape[0],1,fullfield_all.shape[2]))], axis=1) 
+    fullfield_ = fullfield_all[ind,:,:]
+    fullfield_stitched = np.concatenate([np.roll(fullfield_[:, i*num_rows : (i+1)*num_rows, :], -i*12, axis=1) for i in range(num_columns)],axis=2)
+
+    ff_zstack = np.stack([fullfield_stitched[i*num_slices : (i+1)*num_slices, :, :].mean(axis=0) for i in range(num_volumes)])
+
+    # leave the old code, just in case
+    # repeat = fullfield_stitched.shape[0] / num_slices
+    # assert repeat == int(repeat)
+    # repeat = int(repeat)
+
+    # ff_zstack = np.stack([fullfield_stitched[i*num_slices : (i+1)*num_slices, :, :].mean(axis=0) for i in range(repeat)])
+    
+
+    return ff_zstack
