@@ -14,7 +14,7 @@ import numpy as np
 def create_plane_h5_from_tiff(data_fn, plane_ind, num_pages=None, num_planes=8, rerun=False):
     base_name = data_fn.name.split('.')[0]
     save_fn = data_fn.parent / f'{base_name}_{plane_ind:02}.h5'
-    if (save_fn.exists() == False) and (rerun):
+    if (save_fn.exists() == False) and (rerun==False):
         print(f'{base_name} plane index {plane_ind} splitting...')
         t0 = time.time()
         if num_pages is None:
@@ -139,8 +139,8 @@ if __name__ == '__main__':
     num_threads = 10
     num_planes = 8
     epoch_minutes = 1
-    data_dir = Path(r'\\allen\programs\mindscope\workgroups\learning\pilots\online motion correction\mouse_721291\test_240509')
-    data_fn = data_dir / 'no_motioncorrection_1x8_00001.tif'
+    data_dir = Path(r'\\allen\programs\mindscope\workgroups\learning\pilots\online_motion_correction\mouse_721291\test_240515_721291')
+    data_fn = data_dir / '240515_721291_global_30min_1366658085_timeseries_00006.tif'
 
 
     with ScanImageTiffReader(str(data_fn)) as reader:
