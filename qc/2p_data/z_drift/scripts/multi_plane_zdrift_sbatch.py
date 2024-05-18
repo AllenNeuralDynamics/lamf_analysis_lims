@@ -36,21 +36,21 @@ if __name__ == '__main__':
     # osid_df = pd.read_csv(osid_table)
     # osids = osid_df['ophys_session_id'].values
 
-    job_records_dir = Path(r'\allen\programs\mindscope\workgroups\learning\ophys\zdrift\job_records'.replace('\\', '/'))
-    time_since = datetime(2024, 3, 26, 0, 0, 0)
-    files = [f for f in job_records_dir.glob('**/*') if f.is_file() and f.stat().st_ctime > time_since.timestamp()]
-    failed_files = []
-    succeeded_osids = []
-    failed_osids = []
-    success_word = 'total time ='
-    for file in files:
-        with open(file, 'r') as f:
-            lines = f.readlines()
-            if np.array([success_word in l for l in lines]).any():
-                succeeded_osids.append(int(file.name.split('_')[-1].split('.')[0]))
-            else:
-                failed_files.append(file)
-                failed_osids.append(int(file.name.split('_')[-1].split('.')[0]))
+    # job_records_dir = Path(r'\allen\programs\mindscope\workgroups\learning\ophys\zdrift\job_records'.replace('\\', '/'))
+    # time_since = datetime(2024, 3, 26, 0, 0, 0)
+    # files = [f for f in job_records_dir.glob('**/*') if f.is_file() and f.stat().st_ctime > time_since.timestamp()]
+    # failed_files = []
+    # succeeded_osids = []
+    # failed_osids = []
+    # success_word = 'total time ='
+    # for file in files:
+    #     with open(file, 'r') as f:
+    #         lines = f.readlines()
+    #         if np.array([success_word in l for l in lines]).any():
+    #             succeeded_osids.append(int(file.name.split('_')[-1].split('.')[0]))
+    #         else:
+    #             failed_files.append(file)
+    #             failed_osids.append(int(file.name.split('_')[-1].split('.')[0]))
 
     # osid_table = job_dir / 'multiplane_zdrift_osids_240223.csv'
     # osid_df = pd.read_csv(osid_table)
@@ -80,18 +80,24 @@ if __name__ == '__main__':
     #             failed_osids.append(int(file.name.split('_')[-1].split('.')[0]))
     # osids = failed_osids
         
-    # cache = bpc.from_lims()
-    # table = cache.get_ophys_experiment_table(passed_only=False)
-    # lamf_table = table.query('project_code == "LearningmFISHTask1A"')
-    # lamf_table = lamf_table[~(lamf_table.session_type.str.contains("TRAINING_0_"))]        
-    # zdrift_test_table = lamf_table.groupby('ophys_session_id').apply(lambda x: len(x.targeted_structure.unique())==4)
-    # osids = zdrift_test_table[zdrift_test_table].index.values
-    
+    cache = bpc.from_lims()
+    table = cache.get_ophys_experiment_table(passed_only=False)    
+    project_codes = ["omFISHSstMeso", "omFISHGad2Meso", "omFISHCux2Meso", "omFISHRbp4Meso"]
+    num_planes = [8, 8, 6, 4]
+    omfish_osids = []
+    for i in range(4):
+        code = project_codes[i]
+        num_plane = num_planes[i]
+        temp_table = table.query(f'project_code == "{code}"')
+        temp_table = table.query(f'project_code == "{code}"')
+        num_plane_table = temp_table.groupby('ophys_session_id').apply(lambda x: len(x)==num_plane)
+        temp_osids = num_plane_table[num_plane_table].index.values
+        omfish_osids.extend(temp_osids)
         
     job_count = 0
 
     rerun = False
-    for osid in failed_osids:
+    for osid in omfish_osids:
         job_count += 1
         print('starting cluster job for {}, job count = {}'.format(osid, job_count))  # noqa: E501
         job_title = 'osid_{}'.format(osid)
