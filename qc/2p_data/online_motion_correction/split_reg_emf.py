@@ -165,3 +165,5 @@ if __name__ == '__main__':
 
     tasks = [delayed(register_plane_and_save_emf)(h5_fn, frame_rate, epoch_minutes) for h5_fn in results]
     compute(*tasks, num_workers=num_threads)
+
+    client.close()
