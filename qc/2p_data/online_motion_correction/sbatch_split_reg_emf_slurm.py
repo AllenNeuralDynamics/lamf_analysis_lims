@@ -35,8 +35,10 @@ if __name__ == '__main__':
         os.makedirs(stdout_location)
 
     #####################
-    # fn_list = glob(str(job_dir / '*_timeseries_*.tif'))
-    fn_list = [str(job_dir / '240515_721291_global_30min_1366658085_timeseries_00006.tif')]
+    fn_list = glob(str(job_dir / '*_timeseries_*.tif'))
+    emf_fn_list = glob(str(job_dir / '*_timeseries_*_emf.tif'))
+    fn_list = [fn for fn in fn_list if fn not in emf_fn_list]
+    # fn_list = [str(job_dir / '240515_721291_nomotioncorrection_timeseries_30min.tif')]
         
     job_count = 0
 
