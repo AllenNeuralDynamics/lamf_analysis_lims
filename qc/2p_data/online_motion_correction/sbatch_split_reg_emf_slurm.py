@@ -12,7 +12,7 @@ if __name__ == '__main__':
     
     #########################
     ##### Important parameter
-    epoch_minutes = 3
+    epoch_seconds = 10
     num_planes = 8
 
 
@@ -28,7 +28,7 @@ if __name__ == '__main__':
 
     ####################
     # Choose job_dir for saving the job records
-    job_dir = Path(r'\allen\programs\mindscope\workgroups\learning\pilots\online_motion_correction\mouse_721291\test_240515_721291'.replace('\\', '/'))  # noqa: E501
+    job_dir = Path(r'\allen\programs\mindscope\workgroups\learning\pilots\online_motion_correction\mouse_726433\test_240531'.replace('\\', '/'))  # noqa: E501
     stdout_location = job_dir / 'job_records'
     if not os.path.exists(stdout_location):
         print('making folder {}'.format(stdout_location))
@@ -68,7 +68,7 @@ if __name__ == '__main__':
 
             #####################
             # Argument string - need space between arguments
-            args_string = f'--file_path \"{fn}\" --plane_index {plane_index} --epoch_minutes {epoch_minutes}'
+            args_string = f'--file_path \"{fn}\" --plane_index {plane_index} --epoch_seconds {epoch_seconds}'
             slurm.sbatch('{} {} {}'.format(
                         python_executable,
                         python_file,

@@ -27,11 +27,11 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    '--epoch_minutes',
+    '--epoch_seconds',
     type=int,
-    default=5,
-    metavar='epoch_minutes',
-    help='how long is one epoch duration (in min)'
+    default=10,
+    metavar='epoch_seconds',
+    help='how long is one epoch duration (in s)'
 )
 
 parser.add_argument(
@@ -64,16 +64,16 @@ def create_plane_h5_from_tiff(data_fn, plane_ind, num_pages=None, num_planes=8, 
     return save_fn
 
 
-def _create_and_save_emf(reg_movie, epoch_fn, frame_rate, epoch_minutes):
+def _create_and_save_emf(reg_movie, epoch_fn, frame_rate, epoch_seconds):
     if type(epoch_fn) == str:
         epoch_fn = Path(epoch_fn)
     num_frames = reg_movie.shape[0]
-    epoch_length = int(np.round(frame_rate * 60 * epoch_minutes))
+    epoch_length = int(np.round(frame_rate * epoch_seconds))
     num_epochs = int(num_frames // epoch_length)
-    last_epoch_minutes = epoch_minutes
+    last_epoch_seconds = epoch_seconds
     if num_frames % epoch_length > epoch_length / 2:
         num_epochs += 1
-        last_epoch_minutes = epoch_minutes * ((num_frames % epoch_length) / epoch_length)
+        last_epoch_seconds = epoch_seconds * ((num_frames % epoch_length) / epoch_length)
     emf = np.zeros((num_epochs, *reg_movie.shape[1:]))
     for ei in range(num_epochs):
         num_frame_start = ei*epoch_length
@@ -82,14 +82,14 @@ def _create_and_save_emf(reg_movie, epoch_fn, frame_rate, epoch_minutes):
     with h5py.File(epoch_fn, 'w') as h:
         h.create_dataset(name='data', data=emf)
         h.create_dataset(name='num_epochs', data=num_epochs)
-        h.create_dataset(name='epoch_minutes', data=epoch_minutes)
-        h.create_dataset(name='last_epoch_minutes', data=last_epoch_minutes)
+        h.create_dataset(name='epoch_seconds', data=epoch_seconds)
+        h.create_dataset(name='last_epoch_seconds', data=last_epoch_seconds)
     epoch_base_fn = epoch_fn.name.split('.')[0]
     epoch_tif_fn = epoch_fn.parent / f'{epoch_base_fn}.tif'
     tifffile.imwrite(epoch_tif_fn, emf)
 
 
-def register_plane_and_save_emf(h5_fn, frame_rate=11, epoch_minutes=1, key='data'):
+def register_plane_and_save_emf(h5_fn, frame_rate=11, epoch_seconds=10, key='data'):
     if type(h5_fn) == str:
         h5_fn = Path(h5_fn)
     t0 = time.time()
@@ -105,7 +105,7 @@ def register_plane_and_save_emf(h5_fn, frame_rate=11, epoch_minutes=1, key='data
         print(f'{base_name} registration already done. Processing episodic mean FOV...')
         with h5py.File(save_fn_h5, 'r') as h5:
             reg_movie = h5[key][:]
-        _create_and_save_emf(reg_movie, epoch_fn, frame_rate, epoch_minutes)
+        _create_and_save_emf(reg_movie, epoch_fn, frame_rate, epoch_seconds)
 
         t1 = time.time()
         print(f'{base_name} EMF saved and done in {(t1-t0)/60:.2f} min.')
@@ -143,7 +143,7 @@ def register_plane_and_save_emf(h5_fn, frame_rate=11, epoch_minutes=1, key='data
         print(f'{base_name} registration saved in {(t2-t1)/60:.2f} min.')
 
         # calculating and saving episodic mean FOVs (EMF)
-        _create_and_save_emf(reg_movie, epoch_fn, frame_rate, epoch_minutes)
+        _create_and_save_emf(reg_movie, epoch_fn, frame_rate, epoch_seconds)
         
         t3 = time.time()
         print(f'{base_name} EMF saved in {(t3-t2)/60:.2f} min.')
@@ -177,7 +177,7 @@ if __name__ == '__main__':
     filepath = args.file_path
     plane_index = args.plane_index
     num_planes = args.num_planes
-    epoch_minutes = args.epoch_minutes
+    epoch_seconds = args.epoch_seconds
 
     with ScanImageTiffReader(str(filepath)) as reader:
         md_string = reader.metadata()
@@ -196,4 +196,4 @@ if __name__ == '__main__':
 
     h5_fn = create_plane_h5_from_tiff(filepath, plane_index, num_pages, num_planes)
 
-    register_plane_and_save_emf(h5_fn, frame_rate, epoch_minutes)
+    register_plane_and_save_emf(h5_fn, frame_rate, epoch_seconds)

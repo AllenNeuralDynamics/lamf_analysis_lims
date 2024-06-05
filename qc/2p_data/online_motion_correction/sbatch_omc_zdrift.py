@@ -20,7 +20,7 @@ if __name__ == '__main__':
 
     ####################
     # Choose job_dir for saving the job records
-    job_dir = Path(r'\allen\programs\mindscope\workgroups\learning\pilots\online_motion_correction\mouse_721291\test_240515_721291'.replace('\\', '/'))  # noqa: E501
+    job_dir = Path(r'\allen\programs\mindscope\workgroups\learning\pilots\online_motion_correction\mouse_726433\test_240531'.replace('\\', '/'))  # noqa: E501
     stdout_location = job_dir / 'job_records'
     if not os.path.exists(stdout_location):
         print('making folder {}'.format(stdout_location))
@@ -29,16 +29,18 @@ if __name__ == '__main__':
     #####################
     fn_list = glob(str(job_dir / '*_timeseries_*_emf.tif'))
     # fn_list = [str(job_dir / '240515_721291_global_30min_1366658085_timeseries_00006_00_emf.tif')]
-    zstack_dir = str(job_dir / 'ophys_session_1364637859')
+    zstack_dir = str(job_dir / 'ophys_session_1369518919')
     job_count = 0
 
     rerun = False
     for fn in fn_list:
+    # fn = fn_list[0]
+
         job_name = Path(fn).name.split('.')[0]
         job_count += 1
         print('starting cluster job for {}, job count = {}'.format(job_name, job_count))  # noqa: E501
         job_title = 'filename_base_{}'.format(job_name)
-        walltime = '0:30:00'
+        walltime = '1:00:00'
         cpus_per_task = 1
         mem = '20gb'
         job_id = Slurm.JOB_ARRAY_ID
