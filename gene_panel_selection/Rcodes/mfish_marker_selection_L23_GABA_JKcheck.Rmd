@@ -1,0 +1,548 @@
+---
+title:  "Marker panel generation for mouse L2/3 interneurons of omFISH"
+author: "Jeremy Miller"
+date: "October 23, 2020"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+outputFolder <- "\\\\allen/programs/celltypes/workgroups/hct/cellTaxonomy/markerGenes/Mouse/V1/omFISH/"
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = outputFolder)
+```
+
+
+This code identifies the optimal set of marker genes for mouse VISp, given a set of cell types marked by different Cre lines.    
+  
+The strategy used is a correlation-baseed greedy algorithm, which aims to minimize the distance between the actual and predicted clusters (rather than maximizing the fraction correctly mapping to each cluster).  
+  
+### Workspace set-up
+  
+Load libraries.  
+  
+```{r load libraries}
+# Detach all packages (if any)
+nm = names(sessionInfo()$otherPkgs)
+if(!is.null(nm))
+  invisible(lapply(paste0('package:', nm), detach, character.only=TRUE, unload=TRUE))
+
+# Load all packages
+suppressPackageStartupMessages({
+  library(mfishtools)    # This library!
+  library(gplots)        # This is for plotting gene panels only.
+  library(scrattch.vis)  # This is for plotting gene panels only.
+  library(matrixStats)   # For rowMedians function, which is fast
+  library(feather)
+  library(dendextend)
+})
+options(stringsAsFactors = FALSE)  # IMPORTANT
+print("Libraries loaded.")
+
+# File and folder locations
+vispFolder   <- "\\\\allen/programs/celltypes/workgroups/rnaseqanalysis/shiny/facs_seq/Mm_VISp_14236_20180912/"
+setwd(outputFolder)
+```
+  
+  
+Read in the scRNAseq (SMART-seq) data (in this case we will use ~14000 cells from mouse primary visual cortex).  This is the data from Tasic et al 2018.  
+  
+```{r load VISp data}
+dend    <- readRDS(paste0(vispFolder,"dend.RData"))
+anno    <- read_feather(paste0(vispFolder,"anno.feather"))
+data    <- feather(paste0(vispFolder,"data_t.feather"))
+datExpr <- as.matrix(data[,colnames(data)!="gene"])
+rownames(datExpr) <- data$gene
+anno    <- anno[match(colnames(datExpr),anno$sample_id),]  # Put them in the correct order
+```
+
+``` {r check data format - JK}
+# print size of anno and datExpr
+print(dim(anno))
+print(dim(datExpr))
+# print colnames and rownames of anno and datExpr
+print(colnames(anno)[1:5])
+print(rownames(anno)[1:5])
+print(colnames(datExpr)[1:5])
+print(rownames(datExpr)[1:5])
+
+# anno - sample_ind x annotation
+# datExpr - gene x sample_id
+```
+
+  
+### Data preparations
+  
+For this study we are only looking at a specific subset of cell types: GABAergic interneurons located in (or near) L2/3.  This section identifies the set of cell types which fall in that category
+  
+  
+```{r find cell types in relevant layers}
+## Get fraction per layer for each cell type
+broadLines      <- c("Snap25-IRES2-Cre","Slc17a7-IRES2-Cre","Gad2-IRES-Cre","Pvalb-IRES-Cre","Sst-IRES-Cre","Vip-IRES-Cre")
+kpBroad         <- is.element(anno$cre_label,broadLines)
+percentPerLayer <- table(anno$layer_label[kpBroad],anno$cluster_label[kpBroad])
+percentPerLayer <- round(100*t(percentPerLayer)/colSums(percentPerLayer))
+
+## Omit cell types with >80% of cells in L5-6 or >95% of cells in L4-6
+kpLayer <- !((rowSums(percentPerLayer[,c("L5","L6")])>=80)&(rowSums(percentPerLayer[,c("L4","L5","L6")])>=90))
+
+## Retain only GABAergic interneuron types from appropriate layers
+kpTypes <- names(table(anno$cluster_label[anno$class_label=="GABAergic"]))
+kpTypes <- intersect(labels(dend),intersect(kpTypes,rownames(percentPerLayer)[kpLayer]))
+```
+
+
+``` {r how many types and which types are filtered out - JK}
+# print unique cluster_label from anno
+print(length(unique(anno$cluster_label[anno$class_label=="GABAergic"])))
+print(length(kpTypes))
+print(setdiff(unique(anno$cluster_label[anno$class_label=="GABAergic"]), kpTypes))
+print(table(anno[which(anno$cluster_label %in% kpTypes), "cluster_label"]))
+```
+
+  
+This analysis will only be looking at specific cell types based on the transgeneic lines, so we need to build a list of all cell type covered by all transgenenic lines.  For now, just look at a handful of broad transgenic lines, which will likely be sufficient for this project.  Keep all clusters with more than one assigned cell in a given line.  **We note that in this case the results for "Gad2-IRES-Cre" are identical as the results for using a mouse without transgenic information,  except that inclusion of a broad inhibitory marker like Gad1 is required rather than optional.**  
+  
+```{r find cell types of interest for each Cre}
+## For choosing specific transgenic lines, edit this line of code
+# tLines   <- c("Slc17a7-IRES2-Cre","Gad2-IRES-Cre","Slc17a6-IRES-Cre","Pvalb-IRES-Cre","Sst-IRES-Cre","Vip-IRES-Cre")
+ # Slc17a6 only labels L2/3, probably on a technicality, but perfect for this purpose
+tLines   <- c("Gad2-IRES-Cre")
+
+## For choosing all cell types with sufficient information (e.g., at least 20 cells and marking at least two types) uncomment this section
+#tLines       <- table(anno$cre_label)
+#tLines       <- names(tLines)[tLines>=20]
+
+## Get the relevant clusters
+keepClusters <- list()# NoTransgenicInformation = kpTypes)
+useClust <- NULL
+for (cre in tLines){
+  tab <- table(anno$cluster_label[anno$cre_label==cre])
+  tab <- names(tab[tab>1])
+  tmp <- intersect(kpTypes, tab)  # This will be a subset of the types chosen in the previous code block
+  if(length(tmp)>1)
+    keepClusters[[cre]] <- tmp
+  useClust <- sort(unique(c(useClust,tmp)))
+}
+tLines = names(keepClusters)
+
+## Assign starting gene panels (which for now is just an optional broad class marker)
+startingGenePanel <-  list()
+for (cre in tLines){ # Start with two broad class markers
+  startingGenePanel[[cre]] = c("Gad2")  # Gad1 could replace Gad1 if desired.
+}
+```
+  
+  
+Convert the data to log2(cpm).    
+  
+```{r convert to log2}
+normDat = log2(datExpr+1)
+```
+  
+  
+Calculate proportions and medians.  These are both needed for gene filtering and for marker selection.  
+  
+```{r calculate proportions and medians}
+cl <- setNames(anno$cluster_label,colnames(normDat))
+exprThresh = 1
+medianExpr = do.call("cbind", tapply(names(cl), cl, function(x) rowMedians(normDat[,x]))) 
+propExpr   = do.call("cbind", tapply(names(cl), cl, function(x) rowMeans(normDat[,x]>exprThresh))) 
+rownames(medianExpr) <- rownames(propExpr) <- genes <- rownames(normDat)  
+```
+  
+  
+### Combinatorial marker gene selection
+  
+This section is where gene selection happens.  
+There are three steps: (1) gene filtering, (2) marker selection using validated genes, and 
+(3) marker selection using filtered genes, which are described below.  
+  
+We first want to define some gene filters prior to running gene selection.  
+Note that this filtering occurs prior to gene selection and does not occur during the selection process.  
+To see details about all of the specific filters, see the code block below or use `?filterPanelGenes`. 
+Overall, the goal of this section is to exclude genes that won't work properly with the specific spatial transcriptomics method desired 
+because their expression is too low or too high, or they are too short.  It also removes genes with 
+too much off-target expression, genes that are expressed in too many cell types, and g
+enes that are potentially not of interest because they are unannotated, or on a sex chromosome, or 
+are don't work for any other reason. 
+It also takes the most binary genes as the possible selection space in order to try and 
+avoid genes whose only cell type differences are in magnitude.  
+In this case, we will use a total of 300 binary genes, which should broadly cover all the subsets of cell types 
+we will be looking at for different Cre lines.  
+We also include any validated genes, whether or not they pass the filters.  
+**Note: this is the step where we can manually add genes we want to exclude from consideration.**  
+  
+```{r filter gene sets}
+## This is the current set of validated mFISH genes to include in all panels
+passingGenes <- c("Moxd1","Penk","Gad2","Crh","Hpse","Sst","Baiap3","Crhr2","Calb2",
+                  "Tac1","Hpse","Vip","Crh", "Il1rapl2","Npy","Pvalb")
+excludeGenes <- NULL 
+
+## For each panel, define a set of genes that could be included
+runGenesL <- list()
+for (cre in tLines){
+  cat(paste("\n ---------",cre,"-----------\n"))
+  kpClust <- keepClusters[[cre]]  
+  start   <- as.character(startingGenePanel[[cre]])
+ 
+  ## Filter for the top genes  
+  runGenes <- filterPanelGenes(
+    summaryExpr = 2^medianExpr-1,   # medians (could also try means); We enter linear values to match the linear limits below
+    propExpr    = propExpr,         # proportions
+    onClusters  = kpClust,          # clusters of interest for gene panel
+    offClusters = labels(dend)[118:133], # clusters to exclude expression (in this case, glia)
+    geneLengths = NULL,             # vector of gene lengths (not included here)  ### NOTE: I NEED THESE VALUES ###
+    startingGenes  = start,         # Starting genes (from above)
+    numBinaryGenes = 300,           # Number of binary genes (explained below)
+    minOn     = 10,                 # Minimum required expression in highest expressing cell type
+    maxOn     = 300,                # Maximum allowed expression (Not used in this case)
+    maxOff    = Inf,                 # Maximum allowed expression in off types (In this case, infinity since we don't want this filter)
+    minLength = 1400,               # Minimum gene length (to allow probe design; ignored in this case)
+    fractionOnClusters = 0.5,       # Max fraction of on clusters (described above)
+    excludeGenes    = excludeGenes, # Genes to exclude.  Often sex chromosome or mitochondrial genes would be input here.
+    excludeFamilies = c("LOC","Fam","RIK","RPS","RPL","\\-","Gm","Rnf","BC0")) # Avoid unannotated markers
+  runGenes <- union(runGenes,passingGenes)
+  runGenesL[[cre]] <- runGenes
+  cat("\n",paste(length(runGenes),"genes pass filters\n")) 
+}
+```
+  
+  
+The next step is our marker panel selection, which we do in two parts using the same algorithm but different gene sets.  
+This strategy uses a greedy algorithm to iteratively add the "best" gene to the existing panel 
+until the panel reaches a certain size.  
+Specifically, each cell in the reference data set is correlated with each cluster median using the existing marker gene set, 
+and the most highly correlated cluster is compared with the originally assigned cluster for each cell.  
+The algorithm is currently using a strategy that is particularly useful for smaller gene panels, 
+which is where cells are mapped to cluster medians using correlation-based mapping and then 
+a weighting strategy is used to penalize cells that map to a distant cluster more than cells that map to a nearby cluster.  
+**Another option (the default, and which could be used instead if desired) is where the algorithm 
+tries to optimize the fraction of cells correctly mapping to each cluster--this may be worth discussing.**   
+The result is a constructed the gene panel.  
+You can use `?buildMappingBasedMarkerPanel` and see the code block below for details on the parameters, 
+but there are a few key options.  
+First, we find it useful to subsample cells from each cluster which decreases the time for the algorithm to run 
+and also more evenly weights the clusters for gene selection.  
+In this case we are going to run this only on clusters found in each cre line.  
+  
+First we create a filled out starting panel using only validated genes.  
+  
+```{r build initial gene panels based on passing genes}
+seed=12
+sub <- 50     # Number of cells to subsample per cluster
+ps  <- length(passingGenes)-2     # Panel size
+crePanels <- creCorrect <- matrix(0,nrow=ps,ncol=length(tLines))
+colnames(crePanels) <- colnames(creCorrect) <- tLines
+
+for (cre in tLines){
+  cat(paste("\n--------------------",date(),"-",cre,"-----------------------\n"))
+  kpClust <- keepClusters[[cre]]  
+  start   <- as.character(startingGenePanel[[cre]])
+
+  ## Subsample and keep relevant clusters and cells
+  kpSub   <- subsampleCells(anno$cluster_label,sub, seed=seed)         # Subsample cells
+  kpSamp  <- is.element(anno$cluster_label,kpClust)&kpSub   # Keep only subsampled cells from these clusters
+
+  ######## This pre-subsampling is redundant with the subsampling within buildMappingBasedMarkerPanel function
+  # Also this is one time random sampling, which likely will not transfer well to the entire dataset.
+  # It requires iteration in each addition (>= 100). (similar to Qian et al., 2020 which was used by Bugeon et al., 2023)
+  # 
+  
+  ## Build the panels
+  crePanels[,cre] <- suppressWarnings(buildMappingBasedMarkerPanel(
+    mapDat        = normDat[passingGenes,kpSamp],     # Data for optimization
+    medianDat     = medianExpr[passingGenes,kpClust], # Median expression levels of relevant genes in relevant clusters
+    clustersF     = cl[kpSamp],                   # Vector of cluster assignments
+    panelSize     = ps,                           # Final panel size
+    currentPanel  = start,                        # Starting gene panel
+    subSamp       = sub,                          # Maximum number of cells per cluster to include in analysis (20-50 is usually best)
+    writeText     = TRUE,                         # Write the results to the screen as we go
+    panelMin      = 3,                            # Start with this number of genes
+    optimize      = "FractionCorrect"             # FractionCorrect minimizes assignment errors and is only used for the initial gene sets
+  ))
+  ######## overfitting!
+#   kpSub   <- subsampleCells(anno$cluster_label,sub, seed=111)         # Subsample cells
+#   kpSamp  <- is.element(anno$cluster_label,kpClust)&kpSub 
+  creCorrect[,cre] <- fractionCorrectWithGenes(crePanels[,cre],normDat[,kpSamp],medianExpr[,kpClust],cl[kpSamp],plot=FALSE)
+
+#   creCorrect[,cre] <- fractionCorrectWithGenes(crePanels[,cre],normDat,medianExpr[,kpClust],cl,plot=FALSE)
+}
+creScaled <- t(t(creCorrect)/apply(creCorrect,2,max))
+```
+  
+``` {r check number of samples per cluster - JK}
+# print number of samples per cluster
+kpClust <- keepClusters[["Gad2-IRES-Cre"]]
+print(kpClust)
+print(table(anno[(anno$cluster_label %in% kpClust), "cluster_label"]))
+```
+
+  
+Using the results above, choose a reasonable starting panel (e.g., before we start losing our improvements).  
+In this case we will use validated gene until we hit either >50% accuracy or >90% maximum accuracy. 
+These values can be adjusted if needed.  
+  
+```{r define starting panels}
+absolute_accuracy_min = 50
+relative_accuracy_min = 90
+for (cre in tLines){
+  genesToKeep = min(which(((100*creScaled[,cre])>relative_accuracy_min) | creCorrect[,cre]>absolute_accuracy_min))
+  startingGenePanel[[cre]] <- crePanels[1:genesToKeep,cre]
+  print(paste("Starting genes for",cre,"are",paste(startingGenePanel[[cre]],collapse=", ")))
+}
+```
+  
+  
+Now we are going to build the complete panels using the method discussed above with the starting panel listed above.  
+In addition, we are going to return the fraction of cells correctly mapped to their assigned clusters 
+using each gene panel as compared to the fraction correctly mapped using the maximum across the entire gene panel 
+as the best we can do.  
+  
+```{r build gene panels and assess quality}
+seed=18
+sub <- 50     # Number of cells to subsample per cluster
+ps  <- 50     # Panel size
+crePanels <- creCorrect <- matrix(0,nrow=ps,ncol=length(tLines))
+colnames(crePanels) <- colnames(creCorrect) <- tLines
+
+for (cre in tLines){
+  cat(paste("\n--------------------",date(),"-",cre,"-----------------------\n"))
+  kpClust  <- keepClusters[[cre]]  
+  start    <- as.character(startingGenePanel[[cre]])
+  runGenes <- runGenesL[[cre]]
+  
+  ## Subsample and keep relevant clusters and cells
+  kpSub   <- subsampleCells(anno$cluster_label,sub,seed=seed)         # Subsample cells
+  kpSamp  <- is.element(anno$cluster_label,kpClust)&kpSub   # Keep only subsampled cells from these clusters
+  
+  ## Build the panels
+  crePanels[,cre] <- suppressWarnings(buildMappingBasedMarkerPanel(
+    mapDat        = normDat[runGenes,kpSamp],     # Data for optimization
+    medianDat     = medianExpr[runGenes,kpClust], # Median expression levels of relevant genes in relevant clusters
+    clustersF     = cl[kpSamp],                   # Vector of cluster assignments
+    panelSize     = ps,                           # Final panel size
+    currentPanel  = start,                        # Starting gene panel
+    subSamp       = sub,                          # Maximum number of cells per cluster to include in analysis (20-50 is usually best)
+    writeText     = TRUE,                         # Write the results to the screen as we go
+    panelMin      = 3,                            # Start with this number of genes
+    optimize      = "CorrelationDistance"             # CorrelationDistance maximizes the cluster distance as described
+  ))
+  ###### I think this is overfitting
+#   kpSub   <- subsampleCells(anno$cluster_label,sub, seed=15)  # added to select different cells
+#   kpSamp  <- is.element(anno$cluster_label,kpClust)&kpSub     # added to select different cells
+  # not the best way. The best is to cross-validate
+  # That should be actually be dealt within buildMappingBasedMarkerPanel function
+  creCorrect[,cre] <- fractionCorrectWithGenes(crePanels[,cre],normDat[,kpSamp],medianExpr[,kpClust],cl[kpSamp],plot=FALSE)
+  ###### instead,
+  
+#   creCorrect[,cre] <- fractionCorrectWithGenes(crePanels[,cre],normDat,medianExpr[,kpClust],cl,plot=TRUE)
+
+}
+creScaled <- t(t(creCorrect)/apply(creCorrect,2,max))
+# save(crePanels,creScaled,creCorrect,keepClusters,file="panel_info_L23_GABAergic.RData")
+```
+  
+These are the panels (and statistics)!  
+  
+  
+### Present plots and statistics about gene panels 
+  
+We already have an assessment of how well each panel did from above.  Now let's see how many genes we need to accurately define cell types from each Cre line.  
+  
+```{r plot fraction correctly mapped,fig.width=6,fig.height=6}
+creSummary <- data.frame(
+  number_of_clusters = as.numeric(lapply(keepClusters,length)),
+  maximum_accuracy   = round(apply(creCorrect,2,max)),
+  number_of_genes_80 = colSums(creScaled<=0.80),
+  number_of_genes_90 = colSums(creScaled<=0.90),
+  number_of_genes_95 = colSums(creScaled<=0.95)
+)
+data.frame(creSummary)
+```  
+  
+  
+Now, plot the fraction correct curve for all the tested Cre lines.  
+  
+```{r fraction correct, fig.height=5, fig.width=12}
+#pdf("fractionCorrectCurve_L23_GABAergic.pdf",height = 5,width=12)
+for (cre in tLines){
+  fishPanel <- crePanels[,cre]
+  kpClust   <- keepClusters[[cre]]
+  #kpSamp    <- is.element(anno$cluster_label,kpClust)
+  kpSub   <- subsampleCells(anno$cluster_label,sub, seed=3)         # Subsample cells
+  kpSamp  <- is.element(anno$cluster_label,kpClust)&kpSub
+  fractionCorrectWithGenes(fishPanel,normDat[fishPanel,kpSamp],medianExpr[fishPanel,kpClust],
+                           cl[kpSamp], main=paste(cre,"(labels",creSummary[cre,1],"clusters)"),return=FALSE)
+  abline(v=creSummary[cre,3:5],lty="dashed",col="green")
+  abline(h=creSummary[cre,2],lty="dashed",col="brown")
+}
+#dev.off()
+```
+  
+These plots suggests that with 30 genes we are continuing to see improvement by adding new genes; 
+however, by approximately a 20 gene panel the level of improvement decreases dramatically for each gene added.  
+  
+Now let's plot the panel in the context of the clusters we care about.  
+This can be done using the `scrattch.vis` library. 
+Note that the number of genes selected as well as the specific plot chosen can be changed at this step if desired. 
+I also can't figure out how to do this with a for loop so I'm only showing Gad2 Cre for now.  
+  
+```{r panel gene plot in subset, fig.width=14,fig.height=9}
+#for (cre in tLines){
+cre = "Gad2-IRES-Cre"
+  num <- 20  
+  anno$sample_name <- anno$sample_id
+  plotGenes <- crePanels[1:num,cre]
+  plotData  <- cbind(sample_name = colnames(datExpr), as.data.frame(t(datExpr[plotGenes,])))
+  clid      <- intersect(sort(unique(anno$cluster_id)),anno$cluster_id[match(keepClusters[[cre]],anno$cluster_label)])
+  # violin plot example.  Could be swapped with fire, dot, bar, box plot, heatmap, Quasirandom, etc.
+  sample_fire_plot(data = plotData, anno = anno, genes = plotGenes, grouping = "cluster", 
+                   log_scale=TRUE, max_width=15, label_height = 25, group_order = clid, font_size = 12)
+#}
+``` 
+  
+These mostly look reasonable.
+  
+What fraction of cells are correctly mapped to leaf nodes? Note that we don't necessarily expect this number to be high. 
+Also note that this is using all of the above genes, so will actually be higher than we would get with any given 9-gene panel.  
+  
+```{r display fraction correctly mapped}
+for (cre in tLines){
+  cat(paste("\n--------------------",date(),"-",cre,"-----------------------\n"))
+  fishPanel <- crePanels[1:num,cre]
+  kpClust   <- keepClusters[[cre]]
+  kpSamp    <- is.element(anno$cluster_label,kpClust)
+
+  assignedCluster <- suppressWarnings(getTopMatch(corTreeMapping(mapDat = normDat[fishPanel,kpSamp], 
+                     medianDat=medianExpr[fishPanel,kpClust], genesToMap=fishPanel)))
+  print(paste0("Percent correctly mapped: ",signif(100*mean(as.character(assignedCluster$TopLeaf)==cl[kpSamp],na.rm=TRUE),3),"%"))
+}
+```
+  
+Around ~75% of the cells are correctly mapped with this panel, which is reasonable, but less than ideal.  
+  
+As an overview, we create a confusion matrix based on the top leaf assignments. This will let us address which pairs of clusters are the most confused. Are they adjacent/nearby on the tree?  Note that the colors are distorted to highlight confusion in the tree, in this case capped at 0.2, but this can be manually updated below.  
+  
+```{r cluster confusion, fig.height=11,fig.width=11}
+cap = 0.90 
+num = 25  # This is the number of genes in include in the calculation
+
+for (cre in tLines){
+  fishPanel <- crePanels[1:num,cre]
+  kpClust   <- keepClusters[[cre]]
+  kpSamp    <- is.element(anno$cluster_label,kpClust)
+  assignedCluster   <- suppressWarnings(getTopMatch(corTreeMapping(mapDat = normDat[fishPanel,kpSamp], 
+                       medianDat=medianExpr[fishPanel,kpClust], genesToMap=fishPanel)))
+  membConfusionProp <- getConfusionMatrix(cl[kpSamp],assignedCluster[,1],TRUE)
+  clid      <- intersect(sort(unique(anno$cluster_id)),anno$cluster_id[match(keepClusters[[cre]],anno$cluster_label)])
+  clOrd     <- (anno$cluster_label[match(clid,anno$cluster_id)])  # Cluster order
+  heatmap.2(pmin(membConfusionProp,cap)[clOrd,clOrd],Rowv=FALSE,Colv=FALSE,trace="none",dendrogram="none",
+            margins=c(16,16),main=cre)
+}
+```
+
+```{r look at correlation between number of samples and fraction correct - JK}
+num_sample_per_cluster <- table(anno[(anno$cluster_label %in% kpClust), "cluster_label"])
+num_sample_per_cluster <- num_sample_per_cluster[clOrd]
+ordered_confusion <- pmin(membConfusionProp,cap)[clOrd,clOrd]
+fraction_correct = diag(ordered_confusion)
+num_sample_per_cluster_numeric <- as.numeric(num_sample_per_cluster)
+fraction_correct_numeric <- as.numeric(fraction_correct)
+cor(num_sample_per_cluster, fraction_correct)
+# scatter plot
+plot(num_sample_per_cluster_numeric, fraction_correct_numeric, type='p', xlab="Number of samples per cluster", ylab="Fraction correct")
+```
+
+Most of the errors are nearby to the diagonal, which is what we were optimizing for using the clusterDistance strategy.  It's worth noting that the VIP cell type organization is quite complex and that a strict hierarchical representation is not likely a good representation of the data (the same might be true for Sst, but I'm not completely sure about that).  
+  
+Finally, let's see if we can more explicity determine how well we expect to divide the tree, by determining the predicted level of mappability of the SMARTer data without assuming the original tree structure.  To do this we build a tree using only the genes run experimentally (fishPanel) and then see what fraction of cells from each cluster correctly map to each node of the new tree.  We will only consider the relevant cells when performing this analysis.  
+  
+```{r map SMARTER data to SMARTER clusters 1,fig.width=12,fig.height=8}
+for (cre in tLines){
+  fishPanel <- crePanels[1:num,cre]
+  kpClust   <- keepClusters[[cre]]
+  kpSamp    <- is.element(anno$cluster_label,kpClust)
+  runDat    <- normDat[,kpSamp]
+  clustersF <- cl[kpSamp]
+
+  fracCvM <- buildTreeFromGenePanel(clusters=clustersF,refDat=runDat,mapDat=runDat,genesToMap=fishPanel,
+                                    mar=c(10,2,1,1),mappedAsReference=FALSE,#medianDat=medianDat,
+                                    main=paste(cre,"- Fraction correctly mapped (false negative estimate)"))
+  fracMvC <- buildTreeFromGenePanel(clusters=clustersF,refDat=runDat,mapDat=runDat,genesToMap=fishPanel,
+                                    mar=c(10,2,1,1),mappedAsReference=TRUE,#medianDat=medianDat,
+                                    main=paste(cre,"- Fraction of mapped correctly clustered (false positive estimate)"))
+}
+```
+  
+The top plot shows the accuracy of mapping (e.g., how many cells are mapped to the expected node).**This is a measure of the number of false negatives in mapping.**  Overall, mapping is expected to be reasonable: ~50% at leaf nodes with higher numbers as you go up.  The bottom plot shows the fraction of cells mapped to a give cluster that are actually assigned to that cluster.**This is a measure of the number of false positives in mapping.**  In other words, nodes with high numbers in the top plot and lower numbers in the bottom are likely catch-all clusters for crappy or ambiguous cells, while nodes with lower numbers in the top plot are more likely to map incorrectly, but if they do map correctly then you can believe the results.  One important note is that the tree that get's returned here does NOT match the tree that was intially used to define the marker genes.    
+  
+In the Gad2 / no Cre example, there seem to be about 20 clusters where cells map with at least 80% accuracy, which is reasonable.  To begin quantifying this, let's cut this NEW tree at various places and see the number of clusters, if we assume a single height cutoff (which doesn't look right).  
+  
+```{r go up NEW tree, fig.width=12,fig.height=4.3}
+## Set parameters
+hs        <- c(0,0.005,0.01,0.015,(2:19)*0.01,(4:20)*0.05)  # hs = height scaled
+thresh    <- 0.8
+
+## Calculate number of clusters (#ADD THIS FUNCTION TO mfishtools!)
+returnClusterCount <- function (dend, heights = c((0:100)/100))
+{
+  nodeHeight <- get_nodes_attr(dend, "height")
+	maxHeight  <- max(nodeHeight)
+  nodeHeight <- 1 - nodeHeight/maxHeight
+  clusterCount <- NULL
+  for (c in 1:length(heights)) {
+	  clusterCount <- c(clusterCount,2*length(labels(dend))-sum(nodeHeight>=(1-heights[c])))
+  }
+	height = (1-heights)*maxHeight
+	data.frame(height=height,count=clusterCount)
+}
+
+## Complete the analysis and plot the results for each cre line
+for (cre in tLines){
+  fishPanel <- crePanels[1:num,cre]
+  kpClust   <- keepClusters[[cre]]
+  kpSamp    <- is.element(anno$cluster_label,kpClust)
+  runDat    <- normDat[,kpSamp]
+  clustersF <- cl[kpSamp]
+  
+  fracCvM   <- buildTreeFromGenePanel(clusters=clustersF,refDat=runDat,mapDat=runDat,genesToMap=fishPanel,
+                                      mappedAsReference=FALSE,plotdendro=FALSE)
+  
+  ## Calculate accuracy
+  qualTable <- buildQualityTable(fishPanel,fracCvM[[1]],runDat,medianExpr[fishPanel,kpClust][,labels(fracCvM[[1]])],clustersF,heights=hs)
+  accuracy  <- qualTable[dim(qualTable)[1],]
+  useHs     <- min(hs[accuracy>=thresh])
+
+  ## Calculate number of clusters 
+  cnts <- returnClusterCount(fracCvM[[1]],hs)
+
+  ## Plot results
+  par(mfrow=c(1,3))
+  plot(cnts$height,accuracy,lwd=3,type="l",ylab="Percent of nuclei correctly mapping",  
+       xlab="Tree height",main="Accuracy of full panel at a given tree height")
+  abline(h=thresh,col="grey")
+  plot(cnts$height,cnts$count,lwd=3,type="l",ylab="Number of merged clusters",xlab="Tree height",
+       main=paste("Cutoff of",useHs,"yields",nm[hs==useHs],"clusters"))
+  plot(cnts$count,accuracy,lwd=3,type="l",xlab="Number of merged clusters", main=cre,
+       ylab="Accuracy of full panel for a given number of clusters")
+}
+``` 
+  
+We can get ~24 clusters at ~80% accuracy (and 8 clusters to ensure 90% accuracy).  
+  
+Finally, let's output the gene panels, which is what we really want!
+  
+```{r output gene panels}
+write.csv(crePanels,"genePanels_L23_GABAergic.csv",row.names=FALSE)
+```
+  
+  
+Session info.  
+
+```{r}
+sessionInfo()
+```
+
+
+
+  
