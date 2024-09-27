@@ -1,0 +1,433 @@
+---
+title: "Make Pan-Neuronal Panel"
+author: "Hannah Schryver"
+date: "July 26 2024"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+```{r Setup, include=FALSE}
+panel_name <- "pan_neuronal"
+
+# Number of genes to have in the full panel
+full_panel_size <- 30 
+
+# Seed genes
+starting_genes <- c("Gad2","Slc17a7","Tac2","Tac1","Calb1","Npy","Cck","Vip","Crh","Calb2","Penk","Oprm1","Pvalb","Ptprt","Kirrel3","Sst","Ndnf","Nos1","Baz1a","Sncg","Mybpc1","Lamp5","Hpse","Etv1","Rorb","Agmat","Chat","Adamts2")
+
+# Only map cell types that are present in layers 1-4
+layer_2_3_4_filter <- TRUE
+
+# Replace cluster labels with supertype labels
+use_supertypes <- FALSE
+
+# Use cell types for excitatory types and replace cluster labels with supertypes for inhibitory cell types
+blend_supertypes <- TRUE        
+
+# Remove the least informative genes
+remove_bad_genes <- TRUE                
+
+```
+
+```{r Set paths}
+data_folder   <- "//allen/programs/mindscope/workgroups/omfish/hannahs/mfish_project/gene_panels/L23_inh_panel/Mm_VISp_14236_20180912/"
+# output_folder <- paste0("/allen/programs/mindscope/workgroups/omfish/hannahs/mfish_project/gene_panels/pan_neuronal_panel")
+output_folder <- paste0("D:/mfish_panel")
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = output_folder)
+```
+
+
+```{r Load libraries}
+# Detach all packages (if any)
+nm = names(sessionInfo()$otherPkgs)
+if(!is.null(nm))
+  invisible(lapply(paste0('package:', nm), detach, character.only=TRUE, unload=TRUE))
+
+# Load all packages
+suppressPackageStartupMessages({
+  library(mfishtools)                   # Panel generation and mappign functions
+  library(scrattch.vis)                 # This is for plotting gene panels
+  library(matrixStats)                  # For rowMedians function
+  library(feather)                      # If loading data from Allen drive
+  library(gplots)                       # For heatmap.2
+  library(ggplot2)                      
+  library(gridExtra)                    # For combining plots
+  # library(anndata)                    # If loading data in AnnData format
+  library(xlsx)
+  library(viridisLite)
+  library(viridis)
+})
+options(stringsAsFactors = FALSE)
+print("Libraries loaded.")
+
+# File and folder locations
+setwd(output_folder)
+
+```
+
+```{r Load and reformat data}
+# Load the RNAseq data annotations
+anno    <- read_feather(paste0(data_folder,"anno.feather"))
+
+# Load the RNAseq data
+data    <- feather(paste0(data_folder,"data_t.feather"))  ### What is the difference between feather and read_feather here?
+
+# Reformat
+data <- data[,colnames(data)!='X']  ### maybe this is for specific data? Not for L23_inh_panel/Mm_VISp_14236_20180912/
+colnames(data)[2:length(colnames(data))]<-gsub('\\.','-',colnames(data)[2:length(colnames(data))])
+exp_data <- as.matrix(data[,colnames(data)!="gene"])
+rownames(exp_data) <- data$gene
+anno    <- anno[match(colnames(exp_data),anno$sample_id),]  # Put them in the correct order
+anno<-anno[,colnames(anno)!='X']  ### maybe this is for specific data? Not for L23_inh_panel/Mm_VISp_14236_20180912/
+
+```
+
+Replace cell types with supertypes (if selected)
+```{r Replace cell types with supertypes (if selected)}
+# Load the manually defined supertypes and add to anno
+supertypes <-as.data.frame(read.xlsx('//allen/programs/mindscope/workgroups/omfish/hannahs/mfish_project/gene_panels/tasic2018_supertypes_manual_v2.xlsx','all_supertypes_v2'))
+supertypes$Cell.Type <- iconv(supertypes$Cell.Type, from = 'UTF-8', to = 'ASCII//TRANSLIT')
+supertypes$Supertype <- iconv(supertypes$Supertype, from = 'UTF-8', to = 'ASCII//TRANSLIT')
+# anno$cluster_label_original <- anno$cluster_label
+anno$supertype_label <- as.character(supertypes$Supertype)[match(anno$cluster_label,as.character(supertypes$Cell.Type))]
+
+# If replacing all cluster labels with supertype labels
+if (use_supertypes){
+  anno$cluster_label <- anno$supertype_label
+}
+
+# If only replacing cluster labels with suptertype labels
+if (blend_supertypes){
+  anno$cluster_label[anno$class_label=='GABAergic'] <- anno$supertype_label[anno$class_label=='GABAergic']
+}
+
+```
+
+
+
+```{r Find cell types in relevant layers classes, etc}
+# Panel neuronal
+keep_class <- c("GABAergic","Glutamatergic")
+
+# Get the types labels and number of cells
+tab <- table(anno$cluster_label[(anno$class_label %in% keep_class)])
+
+# If only mapping to cell types predominantly in layers 1-4 
+if (layer_2_3_4_filter){ 
+  # Layers 1-4 excitatory types
+  L234_exc_types <- sort(unique(anno$cluster_label[anno$subclass_label %in% c('L2/3 IT','L4')]))
+  
+  # Layers 5 excitatory types
+  L5_exc_types <- sort(unique(anno$cluster_label[anno$subclass_label %in% c("L5 IT", "L5 PT","NP")]))
+  
+  # Inhibitory types layer distributions
+  cluster_layers_table = table(anno$layer_label[(anno$class_label %in% 'GABAergic')],anno$cluster_label[(anno$class_label %in% 'GABAergic')])
+  cluster_layers = round(100*t(cluster_layers_table)/colSums(cluster_layers_table))
+  
+  # Inhibitory types with enough cells in upper layers that we'll need to map them (at least 25%)
+  L234_inh_types <- sort(rownames(cluster_layers)[(rowSums(cluster_layers[,c('L1','L1-L2/3','L1-L4','L2/3','L2/3-L4','L4')])>=25)]) 
+  ## This calculation should consider multi-layer sections as well. 25% is arbitrary
+  
+  # Remaining inhibitory types
+  not_L234_inh_types <- rownames(cluster_layers)[!rownames(cluster_layers) %in% L234_inh_types]
+
+  # Types predominantly in layer 6 (over 75%)
+  L6_inh_types <- sort(rownames(cluster_layers)[(rowSums(cluster_layers[,c('L5-L6','L6','L6b')])>=75)])
+  
+  # The rest considered layer 5 types
+  L5_inh_types <- not_L234_inh_types[!not_L234_inh_types %in% L6_inh_types]
+  
+  # Combine
+  keep_types <- c(L234_exc_types,L234_inh_types)
+  tab <- tab[keep_types]
+}
+keep_clusts <- sort(unique(names(tab[tab>1])))
+
+# Include the L4 excitatory type
+if (use_supertypes){
+  keep_clusts <- sort(unique(c(keep_clusts,'L4 IT VISp')))
+}else{
+  keep_clusts <- sort(unique(c(keep_clusts,'L4 IT VISp Rspo1')))
+}
+
+# Keep a backup of the cluster labels
+anno$cluster_label_pre_grouping <- anno$cluster_label
+
+# Replace the cluster labels with the "mega cluster" label
+anno$cluster_label[anno$cluster_label %in% L5_exc_types] <- 'L5 Exc'
+
+# Combine the inhibitory layer 5 types into subclasses to map
+l5_inh_cluster_labels<-c()
+for (clust in L5_inh_types){
+  type_subclass <- unique(anno$subclass_label[anno$cluster_label == clust])
+  clust_label <- paste0('L5 Inh ',type_subclass)
+  anno$cluster_label[anno$cluster_label == clust] <- clust_label
+  l5_inh_cluster_labels <- c(l5_inh_cluster_labels,clust_label)
+}
+l5_inh_cluster_labels<-unique(l5_inh_cluster_labels)
+
+# Add the "mega clusters" to the list of clusters we're mapping
+keep_clusts <- sort(unique(c(keep_clusts,'L5 Exc',l5_inh_cluster_labels)))
+
+```
+
+```{r Make sure all the genes are present in the reference data}
+# If the gene names are in various cases
+# starting_genes <- tolower(starting_genes)
+# rownames(exp_data)<-tolower(rownames(exp_data))
+
+# Remove starting genes that aren't in the 
+if (length(starting_genes[!starting_genes %in% rownames(exp_data)])>0){
+  print(paste0(starting_genes[!starting_genes %in% rownames(exp_data)], ' not in data!',collapse=", "))
+  starting_genes <- starting_genes[starting_genes %in% rownames(exp_data)]
+}
+# 
+
+```
+
+```{r Convert to log2}
+norm_exp_data = log2(exp_data+1)
+```
+
+```{r Calculate proportions and medians}
+cl <- setNames(anno$cluster_label,colnames(norm_exp_data))
+expr_thresh = 1
+median_expr = do.call("cbind", tapply(names(cl), cl, function(x) rowMedians(norm_exp_data[,x]))) 
+prop_expr   = do.call("cbind", tapply(names(cl), cl, function(x) rowMeans(norm_exp_data[,x]>expr_thresh))) 
+rownames(median_expr) <- rownames(prop_expr) <- genes <- rownames(norm_exp_data)  
+
+```
+
+```{r Filter gene sets}
+start   <- as.character(starting_genes)
+panel_off_clusts <- unique(anno$cluster_label[anno$class_label=="Non-Neuronal"])
+run_genes <- filterPanelGenes(
+  summaryExpr = 2^median_expr-1,  # Medians (could also try means); We enter linear values to match the linear limits below
+  propExpr   = prop_expr,         # Proportions
+  onClusters  = keep_clusts,      # Clusters of interest for gene panel
+  offClusters = panel_off_clusts, # Clusters to exclude expression (in this case, non-neuronal clusters)
+  geneLengths = NULL,             # Vector of gene lengths if available
+  startingGenes  = start,         # Starting genes (from above)
+  numBinaryGenes = 300,           # Number of binary genes (explained below)
+  minOn     = 10,                 # Minimum required expression in highest expressing cell type
+  maxOn     = 300,                # Maximum allowed expression (Not used in this case)
+  maxOff    = 10,                 # Maximum allowed expression in off types (In this case, infinity since we don't want this filter)
+  minLength = 1400,               # Minimum gene length (to allow probe design; ignored in this case)
+  fractionOnClusters = 0.5,       # Max fraction of on clusters (described above)
+  excludeGenes    = NULL,         # Genes to exclude.  Often sex chromosome or mitochondrial genes would be input here.
+  excludeFamilies = c("LOC","Fam","RIK","RPS","RPL","\\-","Gm","Rnf","BC0")) # Avoid unannotated markers
+
+passing_genes <- starting_genes[starting_genes %in% rownames(median_expr)]
+run_genes <- union(run_genes,passing_genes)
+cat("\n",paste(length(run_genes),"genes pass filters\n")) 
+
+```
+
+```{r Build initial gene panels based on passing genes}
+## Subsample cells from each cluster which decreases the time for the algorithm to run and also more evenly weights the clusters for gene selection
+sub <- 50                                                                       # Number of cells to subsample per cluster
+sampled_cells   <- subsampleCells(anno$cluster_label,sub)                       # Subsample cells
+keep_sampled_cells  <- is.element(anno$cluster_label,keep_clusts)&sampled_cells # Keep only subsampled cells from these clusters
+ps  <- length(starting_genes)                                                   # Panel size
+
+# Initialize matrix
+built_panel <- panel_correct <- matrix(0,nrow=ps,ncol=1)
+colnames(built_panel) <- colnames(panel_correct) <- panel_name
+start   <- as.character(starting_genes)
+
+## Order the starting genes
+built_panel <- suppressWarnings(buildMappingBasedMarkerPanel(
+  mapDat        = norm_exp_data[passing_genes,keep_sampled_cells], # Data for optimization
+  medianDat     = median_expr[passing_genes,keep_clusts],          # Median expression levels of relevant genes in relevant clusters
+  clustersF     = cl[keep_sampled_cells],                          # Vector of cluster assignments
+  panelSize     = length(starting_genes),                          # Final panel size
+  currentPanel  = c('Gad2','Slc17a7'),                           # Starting gene panel - if we want specific genes always at the beginning of the ordered list
+  subSamp       = sub,                                             # Maximum number of cells per cluster to include in analysis (20-50 is usually best)
+  writeText     = TRUE,                                            # Write the results to the screen as we go
+  panelMin      = 3,                                               # Start with this number of genes
+  optimize      = 'FractionCorrect'                                # FractionCorrect minimizes assignment errors and is only used for the initial gene sets
+))
+panel_correct <- fractionCorrectWithGenes(built_panel,norm_exp_data[,keep_sampled_cells],median_expr[,keep_clusts],cl[keep_sampled_cells],plot=FALSE)
+panel_scaled <- t(t(panel_correct)/max(panel_correct))
+
+# print(paste0('Ordered starting genes: ',paste0(built_panel,collapse=", ")))
+
+```
+
+```{r Define starting panels}
+# Remove "worst"/"least helpful" genes
+# Can define "bad genes" as an accuracy threshold or only keep a certain number of genes
+
+# Accuracy threshold
+# good_genes <- built_panel[1:min(which(((100*panel_scaled)>90)|panel_correct>50))]
+
+# Only keep first 10 genes
+good_genes <- built_panel[1:16] 
+bad_genes <- setdiff(built_panel,good_genes)
+
+# Print out the "bad" genes but only remove if selected
+if (length(bad_genes)>0){
+  print(paste("Bad genes: ",paste0(bad_genes,collapse=", ")))
+  if (remove_bad_genes){
+    print('Removing bad genes.')
+    starting_genes <- good_genes
+  }
+  if (!remove_bad_genes){
+    print('Keeping bad genes.')
+    starting_genes <- built_panel
+  }
+}else{
+  print('All genes good.') 
+}
+print(paste("Starting genes are",paste(starting_genes,collapse=", ")))
+
+```
+
+
+
+```{r Build gene panels and assess quality}
+## Subsample cells from each cluster which decreases the time for the algorithm to run and also more evenly weights the clusters for gene selection
+sub <- 50                                                                       # Number of cells to subsample per cluster
+sampled_cells   <- subsampleCells(anno$cluster_label,sub)                       # Subsample cells
+keep_sampled_cells  <- is.element(anno$cluster_label,keep_clusts)&sampled_cells # Keep only subsampled cells from these clusters
+ps  <- full_panel_size                                                          # Panel size
+
+# Initialize matrix
+full_built_panel <- full_panel_correct <- matrix(0,nrow=ps,ncol=1)
+colnames(full_built_panel) <- colnames(full_panel_correct) <- panel_name
+start    <- as.character(starting_genes)
+
+## Build the panels
+full_built_panel <- suppressWarnings(buildMappingBasedMarkerPanel(
+  mapDat        = norm_exp_data[run_genes,keep_sampled_cells],  # Data for optimization
+  medianDat     = median_expr[run_genes,keep_clusts],           # Median expression levels of relevant genes in relevant clusters
+  clustersF     = cl[keep_sampled_cells],                       # Vector of cluster assignments
+  panelSize     = ps,                                           # Final panel size
+  currentPanel  = start,                                        # Starting gene panel
+  subSamp       = sub,                                          # Maximum number of cells per cluster to include in analysis (20-50 is usually best)
+  writeText     = TRUE,                                         # Write the results to the screen as we go
+  panelMin      = 3,                                            # Start with this number of genes
+  optimize      = "CorrelationDistance"                         # CorrelationDistance maximizes the cluster distance as described
+))
+full_panel_correct <- fractionCorrectWithGenes(full_built_panel,norm_exp_data[,keep_sampled_cells],median_expr[,keep_clusts],cl[keep_sampled_cells],plot=FALSE)
+full_panel_scaled <- t(t(full_panel_correct)/max(full_panel_correct))
+
+gene_panel <- full_built_panel
+
+```
+
+```{r Plot fraction correctly mapped,fig.width=6,fig.height=6}
+accuracy_summary <- data.frame(
+  maximum_accuracy   = round(max(full_panel_correct)),
+  number_of_genes_80 = colSums(full_panel_scaled<=0.80),
+  number_of_genes_90 = colSums(full_panel_scaled<=0.90),
+  number_of_genes_95 = colSums(full_panel_scaled<=0.95)
+)
+accuracy_summary
+```  
+
+
+### Plots 
+
+```{r Fraction correct for whole panel, fig.height=5, fig.width=20}
+source("/allen/programs/mindscope/workgroups/omfish/hannahs/mfish_project/plots/fractionCorrectWithGenes_v2.R")
+fracs <- fractionCorrectWithGenes_v2(gene_panel,norm_exp_data[gene_panel,keep_sampled_cells],median_expr[gene_panel,keep_clusts],
+                                     cl[keep_sampled_cells], main=paste("Labels",length(unique(keep_clusts)),"clusters)"),return=TRUE)
+frac_genes <- data.frame("num_genes"=c(1:length(fracs)),"gene"=as.character(gene_panel),"fraction"=fracs)
+pl <- ggplot(frac_genes,aes(x=num_genes,y=fraction)) +
+  geom_line() +
+  # geom_hline(yintercept = accuracy_summary[[1]], linetype = 2, color = "red") +
+  geom_text(aes(x = num_genes,y=fraction,label=gene),angle=90,hjust=-0.1,size=6) +
+  labs(title = paste("Labels",length(unique(keep_clusts)),"clusters")) +
+  theme_bw() +
+  # xlab("Number of genes in panel") +
+  ylab("% cells accurately mapped") +
+  xlab("# Genes") +
+  scale_x_continuous(breaks = c(1:length(gene_panel))) +
+  scale_y_continuous(breaks = seq(0,100,by=20),limits = c(-10,110)) +
+  # ylim(-10,110) +
+  theme(axis.text = element_text(size = 16),
+        axis.title.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20),
+        title = element_text(size=18))
+frac_correct_plot <- pl
+
+# View(data.frame(frac_genes))
+
+```
+
+
+```{r Confusion matrix, fig.height=5, fig.width=20}
+# Define the number of genes from the panel to include
+plot_genes<-gene_panel[1:20] 
+
+# Color map
+shared_color <- viridis(100)
+
+# Get the actual clusters
+cl <- setNames(anno$cluster_label,colnames(norm_exp_data))
+
+# Assigned clusters with panel
+assignedCluster   <- suppressWarnings(getTopMatch(corTreeMapping(mapDat = norm_exp_data[plot_genes,keep_sampled_cells], medianDat=median_expr[plot_genes,keep_clusts], genesToMap=plot_genes)))
+
+# Confusion matrix
+membConfusionProp <- getConfusionMatrix(cl[keep_sampled_cells],assignedCluster[,1],TRUE)
+clid      <- intersect(sort(unique(anno$cluster_id)),anno$cluster_id[match(keep_clusts,anno$cluster_label)])
+clOrd     <- (anno$cluster_label[match(clid,anno$cluster_id)])  # Cluster ord
+conf_matrix <- data.frame(membConfusionProp)
+
+# Plot
+hm_mat <- heatmap.2(membConfusionProp[clOrd,clOrd],Rowv=FALSE,Colv=FALSE,trace="none",dendrogram="none",col=shared_color[1:(max(membConfusionProp)*100)])
+conf_matrix <- data.frame(hm_mat$carpet)
+pl <- ggplot(data =  conf_matrix, mapping = aes(x = realCluster, y = foundCluster)) +
+  geom_tile(aes(fill = Freq), colour = "white") +
+  scale_fill_viridis_c(end=max(hm_mat$carpet)) +
+  # geom_text(aes(label = sprintf('%#.2f',Freq)),size=3.5,hjust=0.5,vjust=0.5,col='white') +
+  xlab('Actual type') +
+  ylab('Mapped type') +
+  theme(axis.text.x = element_text(angle = 90,vjust = 0.5, hjust=1,size=8),
+        axis.text.y = element_text(size=8),
+        axis.title.x = element_text(size = 8),
+        title = element_text(size=8),
+        axis.title.y = element_text(size = 8))
+
+confusion_matrix <- pl
+
+# Plot of accuracy for each cluster (the diagonals of the confusion matrix)
+type_accuracy <- conf_matrix %>%filter(realCluster==foundCluster)
+ordered_clust_labels <- c(L234_exc_types,'L5 Exc',l5_inh_cluster_labels)
+ordered_clust_labels <- c(ordered_clust_labels,sort(setdiff(type_accuracy$realCluster,ordered_clust_labels)))
+
+type_acc_plot <- ggplot(data=type_accuracy %>% select(realCluster,Freq), aes(x=factor(realCluster, level = ordered_clust_labels), y=Freq)) +
+  geom_bar(stat="identity") +
+  xlab('Type') +
+  ylab('Accuracy') +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90,vjust = 0.5, hjust=1,size=8),
+        axis.text.y = element_text(size=8),
+        axis.title.x = element_text(size = 8),
+        title = element_text(size=8),
+        axis.title.y = element_text(size = 8))
+
+
+```
+
+```{r Gene expression by cluster, fig.height=5, fig.width = 20}
+source("//allen/programs/mindscope/workgroups/omfish/hannahs/mfish_project/celltype_mapping/plotting_functions/exp_fire_plot.R")
+# Rename/format because plot function is picky
+anno$sample_name <- anno$sample_id
+plotData  <- cbind(sample_name = colnames(exp_data), as.data.frame(t(exp_data[gene_panel,])))
+clid      <- intersect(sort(unique(anno$cluster_id)),anno$cluster_id[match(keep_clusts,anno$cluster_label)])
+# Plot
+fire_plot <- suppressWarnings(exp_fire_plot(data = plotData, anno = anno, genes = gene_panel, grouping = "cluster", log_scale=TRUE, max_width=10, label_height = 24, group_order = clid, font_size = 12, return_type = "plot"))
+
+```
+
+
+```{r combined plot}
+panel_eval_plot <- marrangeGrob(list(fire_plot,confusion_matrix,frac_correct_plot), nrow = 1, ncol = 3, top=NULL)
+#ggsave(file="panel_neuronal_panel.png",plot=panel_eval_plot,path=paste0(plot_path),width=18.18,height=5.2)
+
+```

@@ -1,0 +1,224 @@
+---
+title:  "Test panel accuracy"
+author: "Hannah Schryver"
+date: "Sep 10 2024"
+output: html_notebook
+---
+
+```{r Setup, include=FALSE}
+gene_panel <- c("Gad2","Slc17a7","Pvalb","Sst","Vip","Cck","Tac1","Npy","Crh","Necab1","Ptprt","Kirrel3","Penk","Sp8","Pld5","Tcerg1l","Hcrtr2","Whrn","Slc18a3","Rxfp1","Grm1","Sostdc1","Tpbg","Col24a1","Pip5k1b","Ndst3","Cpne4","Scml4")
+
+cell_types <- c("Lamp5 Fam19a1 Pax6","Lamp5 Fam19a1 Tmem182","Lamp5 Krt73","Lamp5 Lhx6","Lamp5 Lsp1","Lamp5 Ntn1 Npy2r","Lamp5 Plch2 Dock5","Pvalb Reln Itm2a","Pvalb Tpbg","Pvalb Vipr2","Serpinf1 Aqp5 Vip","Sncg Gpr50","Sncg Slc17a8","Sncg Vip Itih5","Sncg Vip Nptx2","Sst Calb2 Necab1","Sst Calb2 Pdlim5","Sst Hpse Cbln4","Sst Tac1 Htr1d","Sst Tac1 Tacr3","Vip Arhgap36 Hmcn1","Vip Chat Htr1f","Vip Col15a1 Pde1a","Vip Crispld2 Htr2c","Vip Crispld2 Kcne4","Vip Igfbp4 Mab21l1","Vip Igfbp6 Car10","Vip Igfbp6 Pltp","Vip Lect1 Oxtr","Vip Lmo1 Myl1","Vip Ptprt Pkp2","Vip Pygm C1ql1","Vip Rspo1 Itga4","Vip Rspo4 Rxfp1 Chat")
+
+L5_inh_types <- c("Pvalb Calb1 Sst","Pvalb Gpr149 Islr","Pvalb Reln Tac1","Serpinf1 Clrn1","Sst Chodl","Sst Chrna2 Glra3","Sst Chrna2 Ptgdr","Sst Esm1","Sst Hpse Sema3c","Sst Mme Fam114a1","Sst Myh8 Etv1 ","Sst Myh8 Fibin","Sst Nr2f2 Necab1","Sst Rxfp1 Prdm8","Sst Tac2 Myh4","Sst Tac2 Tacstd2","Vip Gpc3 Slc18a3","Vip Lmo1 Fam159b")
+
+# Replace cluster labels with supertype labels
+use_supertypes <- FALSE
+
+```
+
+```{r Set paths}
+data_folder   <- "\\\\allen/programs/celltypes/workgroups/rnaseqanalysis/shiny/facs_seq/Mm_VISp_14236_20180912/"
+
+```
+
+
+```{r Load libraries}
+# Load all packages
+
+suppressPackageStartupMessages({
+  library(scrattch.vis)                 # This is for plotting gene panels
+  library(matrixStats)                  # For rowMedians function
+  library(feather)                      # If loading data from Allen drive
+  library(gplots)                       # For heatmap.2
+  library(ggplot2)                      
+  library(gridExtra)                    # For combining plots
+  library(viridisLite)
+  library(viridis)
+  library(mfishtools)
+})
+
+
+options(stringsAsFactors = FALSE)
+print("Libraries loaded.")
+
+```
+
+```{r Load and reformat data}
+# Load the RNAseq data annotations
+anno    <- read_feather(paste0(data_folder,"anno.feather"))
+
+# Load the RNAseq data
+data    <- feather(paste0(data_folder,"data_t.feather"))
+
+# Reformat
+data <- data[,colnames(data)!='X']
+colnames(data)[2:length(colnames(data))]<-gsub('\\.','-',colnames(data)[2:length(colnames(data))])
+exp_data <- as.matrix(data[,colnames(data)!="gene"])
+rownames(exp_data) <- data$gene
+anno    <- anno[match(colnames(exp_data),anno$sample_id),]  # Put them in the correct order
+anno<-anno[,colnames(anno)!='X']
+
+```
+
+Replace cell types with supertypes (if selected)
+```{r Replace cell types with supertypes (if selected)}
+# Load the manually defined supertypes and add to anno
+supertypes <- readRDS("/data/tasic2018_supertype_labels/supertypes.rds")
+anno$supertype_label <- as.character(supertypes$supertype)[match(anno$cluster_label,as.character(supertypes$cluster))]
+anno$supertype_label[is.na(anno$supertype_label)]<-anno$cluster_label[is.na(anno$supertype_label)]
+
+```
+
+```{r Find cell types in relevant layers classes, etc}
+# Combine the inhibitory layer 5 types into subclasses to map
+l5_inh_cluster_labels<-c()
+for (clust in L5_inh_types){
+  type_subclass <- unique(anno$subclass_label[anno$cluster_label == clust])
+  type_subclass <- type_subclass[!is.na(type_subclass)]
+  clust_label <- paste0('L5 Inh ',type_subclass)
+  anno$cluster_label[anno$cluster_label == clust] <- clust_label
+  l5_inh_cluster_labels <- c(l5_inh_cluster_labels,clust_label)
+}
+l5_inh_cluster_labels<-unique(l5_inh_cluster_labels)
+
+# # If replacing all cluster labels with supertype labels
+# if (use_supertypes){
+#   cell_types <-  unique(anno$supertype_label[anno$cluster_label %in% cell_types])
+#   L5_inh_types <- unique(anno$supertype_label[anno$cluster_label %in% L5_inh_types])
+#   anno$cluster_label_original <- anno$cluster_label
+#   anno$cluster_label <- anno$supertype_label
+#   anno$cluster_label[anno$cluster_label_original %in% l5_inh_cluster_labels] <- anno$cluster_label_original[anno$cluster_label_original %in% l5_inh_cluster_labels]
+# }
+
+cell_types <- sort(unique(c(cell_types,l5_inh_cluster_labels)))
+
+```
+
+```{r Convert to log2}
+norm_exp_data = log2(exp_data+1)
+
+```
+
+```{r Calculate proportions and medians}
+cl <- setNames(anno$cluster_label,colnames(norm_exp_data))
+median_expr = do.call("cbind", tapply(names(cl), cl, function(x) rowMedians(norm_exp_data[,x]))) 
+rownames(median_expr) <- genes <- rownames(norm_exp_data)  
+
+```
+
+```{r Order genes}
+sub <- 50                                                                       # Number of cells to subsample per cluster
+
+seed = 10
+
+sampled_cells   <- subsampleCells(anno$cluster_label,sub, seed=seed)                       # Subsample cells
+keep_sampled_cells  <- is.element(anno$cluster_label,cell_types)&sampled_cells # Keep only subsampled cells from these clusters
+ps <- length(gene_panel)
+
+# Initialize matrix
+ordered_panel <- panel_correct <- matrix(0,nrow=ps,ncol=1)
+
+## Order the starting genes
+ordered_panel <- suppressWarnings(buildMappingBasedMarkerPanel(
+  mapDat        = norm_exp_data[gene_panel,keep_sampled_cells], # Data for optimization
+  medianDat     = median_expr[gene_panel,cell_types],          # Median expression levels of relevant genes in relevant clusters
+  clustersF     = cl[keep_sampled_cells],                          # Vector of cluster assignments
+  panelSize     = ps,                          # Final panel size
+  subSamp       = sub,                                             # Maximum number of cells per cluster to include in analysis (20-50 is usually best)
+  writeText     = FALSE,                                            # Write the results to the screen as we go
+  panelMin      = 3,                                               # Start with this number of genes
+  optimize      = 'FractionCorrect'                                # FractionCorrect minimizes assignment errors and is only used for the initial gene sets
+))
+panel_correct <- fractionCorrectWithGenes(ordered_panel,norm_exp_data[,keep_sampled_cells],median_expr[,cell_types],cl[keep_sampled_cells],plot=FALSE)
+panel_scaled <- t(t(panel_correct)/max(panel_correct))
+
+```
+### Plots 
+
+```{r Fraction correct for whole panel, fig.height=5, fig.width=20}
+source("/code/fractionCorrectWithGenes_v2.R")
+fracs <- fractionCorrectWithGenes_v2(gene_panel,norm_exp_data[gene_panel,keep_sampled_cells],median_expr[gene_panel,cell_types],
+                                     cl[keep_sampled_cells], main=paste("Labels",length(unique(cell_types)),"clusters)"),return=TRUE)
+frac_genes <- data.frame("num_genes"=c(1:length(fracs)),"gene"=as.character(gene_panel),"fraction"=fracs)
+pl <- ggplot(frac_genes,aes(x=num_genes,y=fraction)) +
+  geom_line() +
+  geom_text(aes(x = num_genes,y=fraction,label=gene),angle=90,hjust=-0.1,size=6) +
+  labs(title = paste("Labels",length(unique(cell_types)),"clusters")) +
+  theme_bw() +
+  ylab("% cells accurately mapped") +
+  xlab("# Genes") +
+  scale_x_continuous(breaks = c(1:length(gene_panel))) +
+  scale_y_continuous(breaks = seq(0,100,by=20),limits = c(-10,110)) +
+  theme(axis.text = element_text(size = 16),
+        axis.title.x = element_text(size = 20),
+        axis.title.y = element_text(size = 20),
+        title = element_text(size=18))
+frac_correct_plot <- pl
+
+```
+
+
+```{r Confusion matrix, fig.height=5, fig.width=20}
+# Define the number of genes from the panel to include
+plot_genes<-gene_panel#[1:13] 
+
+# Color map
+shared_color <- viridis(100)
+
+# Get the actual clusters
+cl <- setNames(anno$cluster_label,colnames(norm_exp_data))
+
+# Assigned clusters with panel
+assignedCluster   <- suppressWarnings(getTopMatch(corTreeMapping(mapDat = norm_exp_data[plot_genes,keep_sampled_cells], medianDat=median_expr[plot_genes,cell_types], genesToMap=plot_genes)))
+
+# Confusion matrix
+membConfusionProp <- getConfusionMatrix(cl[keep_sampled_cells],assignedCluster[,1],TRUE)
+clid      <- intersect(sort(unique(anno$cluster_id)),anno$cluster_id[match(cell_types,anno$cluster_label)])
+clOrd <- c(cell_types)
+conf_matrix <- data.frame(membConfusionProp)
+
+# Plot
+hm_mat <- heatmap.2(membConfusionProp[clOrd,clOrd],Rowv=FALSE,Colv=FALSE,trace="none",dendrogram="none",col=shared_color[1:(max(membConfusionProp)*100)])
+conf_matrix <- data.frame(hm_mat$carpet)
+pl <- ggplot(data =  conf_matrix, mapping = aes(x = realCluster, y = foundCluster)) +
+  geom_tile(aes(fill = Freq), colour = "white") +
+  scale_fill_viridis_c(end=max(hm_mat$carpet)) +
+  # geom_text(aes(label = sprintf('%#.2f',Freq)),size=3.5,hjust=0.5,vjust=0.5,col='white') +
+  xlab('Actual type') +
+  ylab('Mapped type') +
+  theme(axis.text.x = element_text(angle = 90,vjust = 0.5, hjust=1,size=8),
+        axis.text.y = element_text(size=8),
+        axis.title.x = element_text(size = 8),
+        title = element_text(size=8),
+        axis.title.y = element_text(size = 8))
+
+confusion_matrix <- pl
+
+```
+
+```{r Gene expression by cluster, fig.height=5, fig.width = 20}
+source("/code/exp_fire_plot.R")
+# Rename/format because plot function is picky
+anno$sample_name <- anno$sample_id
+plotData  <- cbind(sample_name = colnames(exp_data), as.data.frame(t(exp_data[gene_panel,])))
+# Replacing cluster labels and messing up correspondence of IDs, so replacing
+anno$cluster_id_original <- anno$cluster_id
+anno$cluster_id <- NaN
+for (cl in c(1:length(cell_types))){
+  anno$cluster_id[anno$cluster_label == cell_types[cl]]<-cl
+}
+
+clid      <- intersect(sort(unique(anno$cluster_id)),anno$cluster_id[match(cell_types,anno$cluster_label)])
+# Plot
+fire_plot <- suppressWarnings(exp_fire_plot(data = plotData, anno = anno, genes = gene_panel, grouping = "cluster", log_scale=TRUE, max_width=10, label_height = 20, group_order = clid, font_size = 12, return_type = "plot"))
+
+```
+
+
+```{r combined plot, fig.height=5, fig.width = 20}
+panel_eval_plot <- marrangeGrob(list(fire_plot,confusion_matrix,frac_correct_plot), nrow = 1, ncol = 3, top=NULL)
+panel_eval_plot
+#ggsave(file="panel_neuronal_panel.png",plot=panel_eval_plot,path=paste0(plot_path),width=18.18,height=5.2)
+
+```
