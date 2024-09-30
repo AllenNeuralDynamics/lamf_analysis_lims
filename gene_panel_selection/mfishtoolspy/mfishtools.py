@@ -350,8 +350,9 @@ def get_beta_score(prop_expr, return_score=True, spec_exp=2):
     def calc_beta(y, spec_exp=2):
         # Calculate pairwise distances
         d1 = squareform(pdist(y.reshape(-1, 1)))
+        d2 = d1[np.triu_indices(d1.shape[0], 1)]
         eps1 = 1e-10  # Small value to avoid division by zero
-        score1 = np.sum(d1**spec_exp) / (np.sum(d1) + eps1)
+        score1 = np.sum(d2**spec_exp) / (np.sum(d2) + eps1)
         return score1
     
     # Apply calc_beta to each row of prop_expr
@@ -487,4 +488,4 @@ def filter_panel_genes(summary_expr, prop_expr=None, on_clusters=None, off_clust
     run_genes = genes[keep_genes][top_beta < num_binary_genes]
     run_genes = sorted(list(set(run_genes).union(starting_genes)))
     
-    return run_genes
+    return run_genes, keep_genes, on_clusters

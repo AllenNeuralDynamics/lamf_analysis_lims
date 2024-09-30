@@ -220,10 +220,10 @@ run_genes <- filterPanelGenes(
   excludeGenes    = NULL,         # Genes to exclude.  Often sex chromosome or mitochondrial genes would be input here.
   excludeFamilies = c("LOC","Fam","RIK","RPS","RPL","\\-","Gm","Rnf","BC0")) # Avoid unannotated markers
 
-passing_genes <- starting_genes[starting_genes %in% rownames(median_expr)]  # JK: maybe just in case? they should be the same
+# passing_genes <- starting_genes[starting_genes %in% rownames(median_expr)]  # JK: maybe just in case? they should be the same
 
 
-run_genes <- union(run_genes,passing_genes) # JK: maybe just in case? run_genes should include passing_genes (or starting_genes), from filterPanelGenes
+# run_genes <- union(run_genes,passing_genes) # JK: maybe just in case? run_genes should include passing_genes (or starting_genes), from filterPanelGenes
 cat("\n",paste(length(run_genes),"genes pass filters\n")) 
 
 # JK: save run_genes in csv
@@ -231,6 +231,83 @@ write.csv(run_genes, file = paste0(output_folder,"/run_genes.csv"), row.names = 
 
 
 ```
+
+
+``` {r checkpoint - filtering function}
+summaryExpr <- 2^median_expr-1  # Medians (could also try means); We enter linear values to match the linear limits below
+propExpr   <- prop_expr         # Proportions
+onClusters  <- keep_clusts      # Clusters of interest for gene panel
+offClusters <- panel_off_clusts # Clusters to exclude expression (in this case, non-neuronal clusters)
+geneLengths <- NULL             # Vector of gene lengths if available
+startingGenes  <- start         # Starting genes (from above)
+numBinaryGenes <- 300           # Number of binary genes (explained below)
+minOn     <- 10                 # Minimum required expression in highest expressing cell type
+maxOn     <- 300                # Maximum allowed expression (Not used in this case)
+maxOff    <- 10                 # Maximum allowed expression in off types (In this case, infinity since we don't want this filter)
+minLength <- 1400               # Minimum gene length (to allow probe design; ignored in this case)
+fractionOnClusters <- 0.5       # Max fraction of on clusters (described above)
+excludeGenes    <- NULL         # Genes to exclude.  Often sex chromosome or mitochondrial genes would be input here.
+excludeFamilies <- c("LOC","Fam","RIK","RPS","RPL","\\-","Gm","Rnf","BC0")
+
+
+<!-- fractionOnClusters = fractionOnClusters[1] -->
+if (fractionOnClusters > 1) 
+    fractionOnClusters = fractionOnClusters/100
+genes <- rownames(summaryExpr)
+genesU <- toupper(genes)
+excludeFamilies <- toupper(excludeFamilies)
+excludeGenes <- is.element(genes, excludeGenes)
+if (length(excludeFamilies) > 0) {
+    for (i in 1:length(excludeFamilies)) {
+        excludeGenes <- excludeGenes | grepl(excludeFamilies[i], 
+            genesU)
+    }
+}
+if (is.character(onClusters)) {
+    onClusters <- is.element(colnames(summaryExpr), onClusters)
+}
+if (is.numeric(onClusters)) {
+    onClusters <- is.element(1:dim(summaryExpr)[2], onClusters)
+}
+if (sum(onClusters) < 2) {
+    stop("Please provide at least two onClusters.  If cluster names were provided, check colnames(summaryExpr).")
+}
+if (is.character(offClusters)) {
+    offClusters <- is.element(colnames(summaryExpr), offClusters)
+}
+if (is.numeric(offClusters)) {
+    offClusters <- is.element(1:dim(summaryExpr)[2], offClusters)
+}
+maxExprOn <- apply(summaryExpr[, onClusters], 1, max)
+if (sum(offClusters) > 1) {
+    maxExprOff <- apply(summaryExpr[, offClusters], 1, max)
+}
+else if (sum(offClusters) == 1) {
+    maxExprOff <- summaryExpr[, offClusters]
+}
+else {
+    maxExprOff <- pmax(maxExprOn, 1e-07) * -Inf
+}
+if (!is.null(geneLengths)) 
+    if (length(geneLengths) != length(offClusters)) {
+        stop("geneLengths must be in the same order and of same length as rows of summaryExpr.")
+    }
+if (!is.null(geneLengths)) 
+    if (!is.numeric(geneLengths)) {
+        stop("geneLengths must be numeric.")
+    }
+if (is.null(geneLengths)) {
+    geneLengths <- maxExprOn + Inf
+}
+keepGenes <- (!excludeGenes) & (maxExprOn > minOn) & (maxExprOn <= 
+    maxOn) & (maxExprOff <= maxOff) & (geneLengths >= minLength) & 
+    (rowMeans(propExpr[, onClusters] > onThreshold) <= fractionOnClusters) & 
+    (rowMeans(propExpr[, onClusters] > onThreshold) > 0)
+keepGenes[is.na(keepGenes)] <- FALSE
+
+```
+
+
 
 ```{r Build initial gene panels based on passing genes without any subsampling}
 #source("/allen/programs/mindscope/workgroups/omfish/hannahs/mfish_project/gene_panels/buildMappingBasedMarkerPanel_v2.R") #for debugging
