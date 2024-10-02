@@ -4,6 +4,8 @@ import re
 from scipy.stats import rankdata
 from scipy.stats import pearsonr
 from scipy.spatial.distance import cdist, pdist, squareform
+import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
 def build_mapping_based_marker_panel(map_data, median_data=None, cluster_call=None, panel_size=50, num_subsample=20, 
@@ -11,10 +13,38 @@ def build_mapping_based_marker_panel(map_data, median_data=None, cluster_call=No
                                     panel_min=5, verbose=True, corr_mapping=True, 
                                     optimize="fraction_correct", cluster_distance=None, 
                                     cluster_genes=None, dend=None, percent_gene_subset=100):
+    """
+    Builds a panel of genes based on mapping to a reference data set.
+
+    #CAUTION: This function is recursive, so the inputs should be a copy of the original data.
+
+    Parameters:
+    map_data (pd.DataFrame): Data to be mapped.
+    median_data (pd.DataFrame): Precomputed medians. If None, it is computed.
+    cluster_call (pd.Series): Cluster assignment of the columns in ref_data.
+    panel_size (int): Number of genes to include in the panel.
+    num_subsample (int): Number of cells to subsample from each cluster.
+    max_fc_gene (int): Maximum number of genes to use for filtering.
+    qmin (float): Quantile to use for filtering.
+    seed (int): Random seed for reproducibility.
+    current_panel (list): List of genes to start with.
+    panel_min (int): Minimum number of genes to start with.
+    verbose (bool): Whether to print progress messages.
+    corr_mapping (bool): Whether to use correlation-based mapping.
+    optimize (str): Optimization criterion for gene selection.
+    cluster_distance (np.ndarray): Pairwise cluster distances.
+    cluster_genes (list): List of genes to use for cluster distance calculation.
+    dend (np.ndarray): Dendrogram structure for cluster distance calculation.
+    percent_gene_subset (float): Percentage of genes to consider for mapping.
+
+    Returns:
+    list: List of genes in the panel.
+    """
+
     if optimize == "dendrogram_height" and dend is None:
         return "Error: dendrogram not provided"
     
-    if median_dat is None:
+    if median_data is None:
         median_data = pd.DataFrame()
         cluster_call = pd.Series(cluster_call, index=map_data.columns)
         median_data = map_data.groupby(cluster_call, axis=1).median()
@@ -24,8 +54,7 @@ def build_mapping_based_marker_panel(map_data, median_data=None, cluster_call=No
 
     if optimize == "fraction_correct":
         cluster_distance = None
-
-    if optimize == "correlation_distance":
+    elif optimize == "correlation_distance":
         if cluster_distance is None:
             cor_dist = lambda x: 1 - np.corrcoef(x)
             if cluster_genes is None:
@@ -34,14 +63,16 @@ def build_mapping_based_marker_panel(map_data, median_data=None, cluster_call=No
             cluster_distance = pd.DataFrame(cor_dist(median_data.loc[cluster_genes, :].T),
                                             index=median_data.columns, columns=median_data.columns)
         
-        if isinstance(cluster_distance, pd.DataFrame):
-            cluster_distance = cluster_distance.loc[median_data.columns, median_data.columns].values.flatten()
-    
-    if optimize == "dendrogram_height":
-        # Custom make_LCA_table and get_node_height functions need to be implemented
-        lca_table = make_LCA_table(dend)
-        cluster_distance = 1 - get_node_height(dend)[lca_table]
-        optimize = "correlation_distance"
+        # This commented code is for flattening the cluster_distance matrix, used at the end of the function
+        # if isinstance(cluster_distance, pd.DataFrame):
+        #     cluster_distance = cluster_distance.loc[median_data.columns, median_data.columns].values.flatten()
+    else:
+        raise ValueError("Invalid optimization criterion. Please choose 'fraction_correct' or 'correlation_distance'.")    
+    # if optimize == "dendrogram_height":
+    #     # Custom make_LCA_table and get_node_height functions need to be implemented
+    #     lca_table = make_LCA_table(dend)
+    #     cluster_distance = 1 - get_node_height(dend)[lca_table]
+    #     optimize = "correlation_distance"
 
     # Calculate the gene expression difference between the 100th percentile cluster and the qmin percentile cluster
     # To be used for filtering (if not filtereed before)
@@ -73,7 +104,14 @@ def build_mapping_based_marker_panel(map_data, median_data=None, cluster_call=No
             other_genes = np.random.choice(other_genes, size=int(len(other_genes) * percent_gene_subset / 100), replace=False)
         
         match_count = np.zeros(len(other_genes))
-        cluster_index = [list(median_data.columns).index(cluster) for cluster in cluster_call]
+        cluster_labels = median_data.columns # for flattening cluster_distance, just in case
+        # cluster_labels = cluster_distance.index.values
+
+        # if cluster_distance is not None:
+        #     assert
+
+        index_map = {label: idx for idx, label in enumerate(cluster_labels)}
+        cluster_call_inds = np.array([index_map[label] for label in cluster_call.values])
         
         for i, gene in enumerate(other_genes):
             ggnn = current_panel + [gene]
@@ -86,11 +124,14 @@ def build_mapping_based_marker_panel(map_data, median_data=None, cluster_call=No
             ranked_leaf_and_value = get_top_match(corr_matrix_df)
             top_leaf = ranked_leaf_and_value['TopLeaf'].values
 
-            if cluster_distance is None:
+            if cluster_distance is None: # optimize="fraction_correct"
                 match_count[i] = np.mean(cluster_call == top_leaf)
-            else:
-                ind_in_cluster_dist = len(median_data.columns) * (np.array([list(median_data.columns).index(x) for x in top_leaf]) - 1) + cluster_index
-                match_count[i] = -np.mean(cluster_distance[ind_in_cluster_dist])
+            else:                
+                top_leaf_inds = np.array([index_map[label] for label in top_leaf])
+                corr_dist_values = cluster_distance.values[cluster_call_inds, top_leaf_inds]
+                # linear_inds = cluster_call_inds * len(cluster_labels) + top_leaf_inds # for flattening cluster_distance
+                # corr_dist_values = cluster_distance[linear_inds]
+                match_count[i] = -np.mean(corr_dist_values)
         
         wm = np.argmax(match_count)
         gene_to_add = other_genes[wm]
@@ -102,7 +143,7 @@ def build_mapping_based_marker_panel(map_data, median_data=None, cluster_call=No
                 print(f"Added {gene_to_add} with average cluster distance {-match_count[wm]:.3f} [{len(current_panel)}].")
         
         current_panel.append(gene_to_add)
-        current_panel = build_mapping_base_marker_panel(map_data=map_data, median_data=median_data, cluster_call=cluster_call, 
+        current_panel = build_mapping_based_marker_panel(map_data=map_data, median_data=median_data, cluster_call=cluster_call, 
                                                        panel_size=panel_size, num_subsample=num_subsample, max_fc_gene=max_fc_gene, 
                                                        qmin=qmin, seed=seed, current_panel=current_panel, 
                                                        panel_min=panel_min, verbose=verbose, corr_mapping=corr_mapping, 
@@ -256,14 +297,14 @@ def get_top_match(memb_cl):
     tmp_cl = np.apply_along_axis(lambda x: [memb_cl.columns[np.argmax(x)], x[np.argmax(x)]], 1, memb_cl)
 
     # Transpose and convert to DataFrame
-    ranked_leaf_and_value = pd.DataFrame(tmp_cl, columns=["TopLeaf", "Value"])
+    ranked_leaf_and_value = pd.DataFrame(tmp_cl, columns=["TopLeaf", "Value"], index=memb_cl.index)
     
     # Convert 'Value' column to numeric
     ranked_leaf_and_value["Value"] = pd.to_numeric(ranked_leaf_and_value["Value"])
 
     # Handle missing values
-    ranked_leaf_and_value["TopLeaf"].fillna("none", inplace=True)
-    ranked_leaf_and_value["Value"].fillna(0, inplace=True)
+    ranked_leaf_and_value["TopLeaf"] = ranked_leaf_and_value["TopLeaf"].fillna("none")
+    ranked_leaf_and_value["Value"] = ranked_leaf_and_value["Value"].fillna(0)
 
     return ranked_leaf_and_value
 
@@ -365,7 +406,7 @@ def get_beta_score(prop_expr, return_score=True, spec_exp=2):
     if return_score:
         return beta_score
     else:
-        score_rank = np.argsort(-beta_score)  # Rank in descending order
+        score_rank = rankdata(-beta_score)  # Rank in descending order
         return score_rank
 
 
@@ -485,7 +526,120 @@ def filter_panel_genes(summary_expr, prop_expr=None, on_clusters=None, off_clust
     # Calculate beta score (rank)
     top_beta = get_beta_score(prop_expr.loc[keep_genes, on_clusters], False)
     
-    run_genes = genes[keep_genes][top_beta < num_binary_genes]
+    run_genes = genes[keep_genes][top_beta <= num_binary_genes]
     run_genes = sorted(list(set(run_genes).union(starting_genes)))
     
     return run_genes, keep_genes, on_clusters
+
+
+
+############################################################################################################
+### Post-hoc analysis
+
+def fraction_correct_with_genes(ordered_genes, map_data, median_data, cluster_call,
+                                verbose=False, plot=True, return_result=True, **kwargs):
+    num_gn = range(2, len(ordered_genes))
+    frac = np.zeros(len(ordered_genes))
+    
+    for i in num_gn:
+        gns = ordered_genes[:i]
+        
+        # Call the Python equivalent of corTreeMapping (needs implementation)
+        cor_map_tmp = cor_tree_mapping(map_data=map_data, median_data=median_data, genes_to_map=gns)
+        
+        # Handle NaN values by replacing them with 0
+        cor_map_tmp[np.isnan(cor_map_tmp)] = 0
+        
+        # Call the Python equivalent of getTopMatch (needs implementation)
+        top_leaf_tmp = get_top_match(cor_map_tmp)
+        
+        # Calculate the fraction of matches where top_leaf_tmp matches cluster_call
+        frac[i] = 100 * np.mean(top_leaf_tmp.TopLeaf.values == cluster_call.values)
+    
+    # Handle any remaining NaN values in frac
+    frac[np.isnan(frac)] = 0
+    
+    # Plotting the result if requested
+    if plot:
+        ax = plot_correct_with_genes(frac, genes=ordered_genes, **kwargs)
+    
+    # Return the fraction array if requested
+    if return_result and plot:
+        return frac, ax
+    elif return_result:
+        return frac
+    elif plot:
+        return ax
+
+
+def plot_correct_with_genes(frac, genes=None, ax=None, xlabel="Number of genes in panel", 
+                    title_text="All clusters gene panel", ylim=(-10, 100), 
+                    figsize=(10, 6), lwd=5, ylabel="Percent of nuclei correctly mapping", 
+                    color="grey", **kwargs):
+    # If genes are not provided, use default names (in R, names(frac) is used)
+    if genes is None:
+        genes = [f"Gene_{i+1}" for i in range(len(frac))]
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 6))
+    num_gn = np.arange(1, len(frac) + 1)
+
+    # Plot the fraction with labels
+    ax.plot(num_gn, frac, color="grey", linewidth=lwd, **kwargs)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title_text)
+    ax.set_ylim(ylim)
+
+    # Add horizontal dotted lines
+    for h in np.arange(-2, 21) * 5:  # Equivalent to (-2:20)*5 in R
+        ax.axhline(y=h, color=color, linestyle='dotted')
+
+    # Add the horizontal solid line at h=0
+    ax.axhline(y=0, color="black", linewidth=2)
+
+    # Add text labels for the genes
+    for x, y, gene in zip(num_gn, frac, genes):
+        ax.text(x, y, gene, rotation=90, verticalalignment='bottom')
+
+    return ax
+
+
+def plot_confusion_matrix(confusion_matrix, ax=None, title_text=None, cmap="viridis"):
+    if ax is None:
+            fig, ax = plt.subplots(figsize=(10,10))
+    im = ax.imshow(confusion_matrix)
+    # add colorbar to the right, with the same height as the image
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="3%", pad=0.05)
+    cbar = plt.colorbar(im, cax=cax)
+    cbar.set_label('Proportion correct', fontsize=20)
+
+    ax.set_xlabel(confusion_matrix.columns.name, fontsize=20)
+    ax.set_ylabel(confusion_matrix.index.name, fontsize=20)
+    ax.set_xticks(range(len(confusion_matrix.columns)))
+    ax.set_yticks(range(len(confusion_matrix.index)))
+    ax.set_xticklabels(confusion_matrix.columns, rotation=90)
+    ax.set_yticklabels(confusion_matrix.index);
+    if title_text is not None:
+        ax.set_title(title_text, fontsize=20)
+    return ax
+
+
+def get_confusion_matrix(real_cluster, predicted_cluster, proportions=True):
+    # Get unique levels
+    levels = np.sort(np.unique(np.concatenate((real_cluster, predicted_cluster))))
+
+    # Convert to categorical with the same levels for both
+    real_cluster = pd.Categorical(real_cluster, categories=levels, ordered=True)
+    predicted_cluster = pd.Categorical(predicted_cluster, categories=levels, ordered=True)
+
+    # Create confusion matrix using pandas crosstab
+    confusion = pd.crosstab(predicted_cluster, real_cluster, rownames=['Predicted'], colnames=['Real'])
+
+    # If proportions is True, normalize by the column sums
+    if proportions:
+        col_sums = confusion.sum(axis=0)
+        confusion = confusion.divide(col_sums.replace(0, 1e-08), axis=1)  # pmax equivalent to avoid division by zero
+
+    return confusion

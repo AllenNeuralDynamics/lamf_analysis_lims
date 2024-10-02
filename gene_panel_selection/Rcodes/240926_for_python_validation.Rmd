@@ -201,6 +201,12 @@ rownames(median_expr) <- rownames(prop_expr) <- genes <- rownames(norm_exp_data)
 
 ```
 
+```{r save prop_expr and median_expr}
+write.csv(prop_expr, file = paste0(output_folder, "/prop_expr_tmp_R.csv"), row.names = TRUE)
+write.csv(median_expr, file = paste0(output_folder, "/median_expr_tmp_R.csv"), row.names = TRUE)
+```
+
+
 ```{r Filter gene sets}
 start   <- as.character(starting_genes)
 panel_off_clusts <- unique(anno$cluster_label[anno$class_label=="Non-Neuronal"])
@@ -227,13 +233,13 @@ run_genes <- filterPanelGenes(
 cat("\n",paste(length(run_genes),"genes pass filters\n")) 
 
 # JK: save run_genes in csv
-write.csv(run_genes, file = paste0(output_folder,"/run_genes.csv"), row.names = FALSE)
+write.csv(run_genes, file = paste0(output_folder,"/run_genes_tmp_inh_R.csv"), row.names = FALSE)
 
 
 ```
 
 
-``` {r checkpoint - filtering function}
+```{r checkpoint - filtering function}
 summaryExpr <- 2^median_expr-1  # Medians (could also try means); We enter linear values to match the linear limits below
 propExpr   <- prop_expr         # Proportions
 onClusters  <- keep_clusts      # Clusters of interest for gene panel
@@ -249,8 +255,10 @@ fractionOnClusters <- 0.5       # Max fraction of on clusters (described above)
 excludeGenes    <- NULL         # Genes to exclude.  Often sex chromosome or mitochondrial genes would be input here.
 excludeFamilies <- c("LOC","Fam","RIK","RPS","RPL","\\-","Gm","Rnf","BC0")
 
+onThreshold <- 0.5
 
-<!-- fractionOnClusters = fractionOnClusters[1] -->
+
+fractionOnClusters = fractionOnClusters[1]
 if (fractionOnClusters > 1) 
     fractionOnClusters = fractionOnClusters/100
 genes <- rownames(summaryExpr)
@@ -278,24 +286,26 @@ if (is.character(offClusters)) {
 if (is.numeric(offClusters)) {
     offClusters <- is.element(1:dim(summaryExpr)[2], offClusters)
 }
+
 maxExprOn <- apply(summaryExpr[, onClusters], 1, max)
 if (sum(offClusters) > 1) {
     maxExprOff <- apply(summaryExpr[, offClusters], 1, max)
-}
-else if (sum(offClusters) == 1) {
+} else if (sum(offClusters) == 1) {
     maxExprOff <- summaryExpr[, offClusters]
-}
-else {
+} else {
     maxExprOff <- pmax(maxExprOn, 1e-07) * -Inf
 }
-if (!is.null(geneLengths)) 
+
+if (!is.null(geneLengths)) {
     if (length(geneLengths) != length(offClusters)) {
         stop("geneLengths must be in the same order and of same length as rows of summaryExpr.")
     }
-if (!is.null(geneLengths)) 
+}
+if (!is.null(geneLengths)) {
     if (!is.numeric(geneLengths)) {
         stop("geneLengths must be numeric.")
     }
+}
 if (is.null(geneLengths)) {
     geneLengths <- maxExprOn + Inf
 }
@@ -306,13 +316,26 @@ keepGenes <- (!excludeGenes) & (maxExprOn > minOn) & (maxExprOn <=
 keepGenes[is.na(keepGenes)] <- FALSE
 
 ```
+```{r }
+write.csv(keepGenes, file = paste0(output_folder,"/keepGenes_tmp_inh_R.csv"))
+```
 
+
+```{r }
+topBetaScores <- getBetaScore(propExpr[keepGenes, onClusters], TRUE)
+write.csv(topBetaScores, file = paste0(output_folder,"/topBeta_scores_tmp_inh_R.csv"))
+topBeta <- getBetaScore(propExpr[keepGenes, onClusters], FALSE)
+write.csv(topBeta, file = paste0(output_folder,"/topBeta_tmp_inh_R.csv"))
+```
 
 
 ```{r Build initial gene panels based on passing genes without any subsampling}
+
+start_time <- proc.time()
 #source("/allen/programs/mindscope/workgroups/omfish/hannahs/mfish_project/gene_panels/buildMappingBasedMarkerPanel_v2.R") #for debugging
 ## Subsample cells from each cluster which decreases the time for the algorithm to run and also more evenly weights the clusters for gene selection
 # keep_clusts_no_layer_diffs <- setdiff(keep_clusts,l5_inh_cluster_labels)
+
 
 keep_sampled_cells  <- is.element(anno$cluster_label,keep_clusts)
 
@@ -331,17 +354,73 @@ built_panel <- suppressWarnings(buildMappingBasedMarkerPanel(
   subSamp       = NA, # To not subsample
   writeText     = TRUE,                                            # Write the results to the screen as we go
   panelMin      = 3,                                               # Start with this number of genes
-  optimize      = 'CorrelationDistance'                                # FractionCorrect minimizes assignment errors and is only used for the initial gene sets
+#   optimize      = 'CorrelationDistance'                                # FractionCorrect minimizes assignment errors and is only used for the initial gene sets
+  optimize      = 'fractionCorrect'
 ))
+end_time <- proc.time()
+print(paste("Elapsed time for building the panel:",end_time-start_time))
+```
+
+
+
+```{r save built_panel}
+
 panel_correct <- fractionCorrectWithGenes(built_panel,norm_exp_data[,keep_sampled_cells],median_expr[,keep_clusts],cl[keep_sampled_cells],plot=FALSE)
 panel_scaled <- t(t(panel_correct)/max(panel_correct))
 
 
-# JK save the results, combining gene_panel and full_panel_correct, after making them as dataframes
-selection_results <- data.frame(Gene = built_panel, Accuracy = full_panel_correct)
+# JK save the results, combining gene_panel and panel_correct, after making them as dataframes
+selection_results <- data.frame(Gene = built_panel, Accuracy = panel_correct)
 # save selection_results
 # write.csv(selection_results, file = paste0(output_folder, "/gene_panel_selection_results_seed", seed, ".csv"), row.names = FALSE)
-write.csv(selection_results, file = paste0(output_folder, "/gene_panel_selection_results_nosubsample_R.csv"), row.names = FALSE)
+write.csv(selection_results, file = paste0(output_folder, "/gene_panel_selection_results_nosubsample_fraction_correct_R.csv"), row.names = FALSE)
 
 
+```
+
+```{r save input data}
+mapDat <- norm_exp_data[run_genes,keep_sampled_cells]
+write.csv(mapDat, file = paste0(output_folder,"/mapDat_tmp_inh_R.csv"), row.names = TRUE)
+medianDat <- median_expr[run_genes,keep_clusts]
+write.csv(medianDat, file = paste0(output_folder,"/medianDat_tmp_inh_R.csv"), row.names = TRUE)
+clustersF <- cl[keep_sampled_cells]
+write.csv(clustersF, file = paste0(output_folder,"/clustersF_tmp_inh_R.csv"), row.names = TRUE)
+```
+
+
+```{r inside the function of buildMappingBasedMarkerPanel}
+corDist <- function(x) return(as.dist(1 - WGCNA::cor(x)))
+clusterGenes = rownames(medianDat)
+clusterGenes <- intersect(clusterGenes, rownames(medianDat))
+clusterDistance <- as.matrix(corDist(medianDat[clusterGenes, 
+                ]))
+write.csv(clusterDistance, file = paste0(output_folder,"/clusterDistance_tmp_inh_R.csv"), row.names = TRUE)
+```
+
+```{r corTreeMapping test}
+currentPanel  = start
+otherGenes <- setdiff(rownames(mapDat), currentPanel)
+# sort otherGenes disregarding case
+otherGenes <- otherGenes[order(tolower(otherGenes))]
+gene <- otherGenes[1]
+ggnn <- c(currentPanel, gene)
+corMapTmp <- corTreeMapping(mapDat = mapDat, 
+                medianDat = medianDat, genesToMap = ggnn)
+write.csv(corMapTmp, file = paste0(output_folder,"/corMapTmp_tmp_inh_R.csv"), row.names = TRUE)
+```
+
+```{r get_top_match}
+topLeafTmp <- getTopMatch(corMapTmp)
+write.csv(topLeafTmp, file = paste0(output_folder,"/topLeafTmp_tmp_inh_R.csv"), row.names = TRUE)
+```
+
+```{r match_count test}
+if (is.matrix(clusterDistance)) {
+    clusterDistance <- clusterDistance[colnames(medianDat), 
+                    colnames(medianDat)]
+    clusterDistance <- as.vector(clusterDistance)
+}
+clustIndex <- match(clustersF, colnames(medianDat))
+tmpVal <- dim(medianDat)[2] * (match(topLeafTmp[,1], colnames(medianDat)) - 1) + clustIndex
+matchCountTmp <- -mean(clusterDistance[tmpVal])
 ```

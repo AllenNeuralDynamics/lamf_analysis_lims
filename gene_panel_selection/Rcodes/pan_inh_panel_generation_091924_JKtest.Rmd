@@ -201,6 +201,8 @@ rownames(median_expr) <- rownames(prop_expr) <- genes <- rownames(norm_exp_data)
 
 ```
 
+
+
 ```{r Filter gene sets}
 start   <- as.character(starting_genes)
 panel_off_clusts <- unique(anno$cluster_label[anno$class_label=="Non-Neuronal"])
