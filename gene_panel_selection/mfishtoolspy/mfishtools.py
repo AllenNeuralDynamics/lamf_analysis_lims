@@ -605,24 +605,25 @@ def plot_correct_with_genes(frac, genes=None, ax=None, xlabel="Number of genes i
     return ax
 
 
-def plot_confusion_matrix(confusion_matrix, ax=None, title_text=None, cmap="viridis"):
+def plot_confusion_matrix(confusion_matrix, ax=None, title_text=None, cmap="viridis",
+                          label_fontsize=20, figsize=(10, 10)):
     if ax is None:
-            fig, ax = plt.subplots(figsize=(10,10))
-    im = ax.imshow(confusion_matrix)
+        fig, ax = plt.subplots(figsize=figsize)
+    im = ax.imshow(confusion_matrix, cmap=cmap)
     # add colorbar to the right, with the same height as the image
     divider = make_axes_locatable(ax)
     cax = divider.append_axes("right", size="3%", pad=0.05)
     cbar = plt.colorbar(im, cax=cax)
-    cbar.set_label('Proportion correct', fontsize=20)
+    cbar.set_label('Proportion correct', fontsize=label_fontsize)
 
-    ax.set_xlabel(confusion_matrix.columns.name, fontsize=20)
-    ax.set_ylabel(confusion_matrix.index.name, fontsize=20)
+    ax.set_xlabel(confusion_matrix.columns.name, fontsize=label_fontsize)
+    ax.set_ylabel(confusion_matrix.index.name, fontsize=label_fontsize)
     ax.set_xticks(range(len(confusion_matrix.columns)))
     ax.set_yticks(range(len(confusion_matrix.index)))
     ax.set_xticklabels(confusion_matrix.columns, rotation=90)
     ax.set_yticklabels(confusion_matrix.index);
     if title_text is not None:
-        ax.set_title(title_text, fontsize=20)
+        ax.set_title(title_text, fontsize=label_fontsize)
     return ax
 
 
