@@ -364,7 +364,7 @@ accuracy_summary
 ### Plots 
 
 ```{r Fraction correct for whole panel, fig.height=5, fig.width=20}
-source("/allen/programs/mindscope/workgroups/omfish/hannahs/mfish_project/plots/fractionCorrectWithGenes_v2.R")
+source("\\\\allen/programs/mindscope/workgroups/omfish/hannahs/mfish_project/plots/fractionCorrectWithGenes_v2.R")
 fracs <- fractionCorrectWithGenes_v2(gene_panel,norm_exp_data[gene_panel,keep_sampled_cells],median_expr[gene_panel,keep_clusts],
                                      cl[keep_sampled_cells], main=paste("Labels",length(unique(keep_clusts)),"clusters)"),return=TRUE)
 frac_genes <- data.frame("num_genes"=c(1:length(fracs)),"gene"=as.character(gene_panel),"fraction"=fracs)
