@@ -14,7 +14,7 @@ import dask
 def build_mapping_based_marker_panel_testing(map_data, mapping_median_data=None, mapping_call=None, 
                                     mapping_to_group=None, group_median_data=None, num_iter_each_addition=100,
                                     panel_size=50, num_subsample=50, na_str='None', use_parallel=True,
-                                    max_fc_gene=1000, qmin=0.75, seed=None, current_panel=None, 
+                                    max_fc_gene=1000, qmin=0.75, seed=None, current_panel=None, current_metric=None,
                                     panel_min=5, verbose=True, corr_mapping=True, 
                                     optimize="correlation_distance", group_distance=None, 
                                     cluster_genes=None, dend=None, percent_gene_subset=100):
@@ -30,7 +30,7 @@ def build_mapping_based_marker_panel_testing(map_data, mapping_median_data=None,
     mapping_to_group (pd.DataFrame): Grouping assignment of the columns in map_data. If None, all the mappings will be used.
     num_iter_each_addition (int): Number of iterations to add each gene. If num_subsample is None, this is ignored.
     panel_size (int): Number of genes to include in the panel.
-    num_subsample (int): Number of cells to subsample from each cluster.
+    num_subsample (int): Number of cells to subsample from each group.
     na_str (str): String to replace NA values with. Used for correlation-based mapping (group_distance, mapping_to_group, def get_top_match).
     use_parallel (bool): Whether to use parallel processing for each iteration within one gene addition.
     max_fc_gene (int): Maximum number of genes to use for filtering.
@@ -48,6 +48,7 @@ def build_mapping_based_marker_panel_testing(map_data, mapping_median_data=None,
 
     Returns:
     list: List of genes in the panel.
+    list: List of metrics for each gene addition.
     """
 
     if optimize == "dendrogram_height" and dend is None:
@@ -111,6 +112,8 @@ def build_mapping_based_marker_panel_testing(map_data, mapping_median_data=None,
         current_panel = list(set(current_panel or []).union(set(mapping_median_data.index[rank_expr_diff.argsort()[:panel_min]])))
         if verbose:
             print(f"Setting starting panel as: {', '.join(current_panel)}")
+    if current_metric is None:
+        current_metric = []
     
     if len(current_panel) < panel_size:
         other_genes = list(set(map_data.index).difference(set(current_panel)))
@@ -149,7 +152,7 @@ def build_mapping_based_marker_panel_testing(map_data, mapping_median_data=None,
         else:
             for iter_num in range(num_iter_each_addition):
                 if num_subsample is not None:
-                    keep_sample = subsample_cells(mapping_call, num_subsample, seed)
+                    keep_sample = subsample_cells(group_call, num_subsample, seed) # subsample from group_call
                     map_data_iter = map_data.loc[:, keep_sample]
                     group_call_iter = group_call.loc[keep_sample]
                     if seed is not None:
@@ -164,24 +167,27 @@ def build_mapping_based_marker_panel_testing(map_data, mapping_median_data=None,
         if verbose:
             if optimize == "fraction_correct":
                 print(f"Added {gene_to_add} with {mean_match_count[wm]:.3f}, now matching [{len(current_panel)}].")
+                current_metric.append(mean_match_count[wm])
             else:
                 print(f"Added {gene_to_add} with average cluster distance {-mean_match_count[wm]:.3f} [{len(current_panel)}].")
+                current_metric.append(-mean_match_count[wm])
         
         current_panel.append(gene_to_add)
-        current_panel = build_mapping_based_marker_panel_testing(map_data=map_data, mapping_median_data=mapping_median_data, mapping_call=mapping_call, 
+        
+        current_panel, current_metric = build_mapping_based_marker_panel_testing(map_data=map_data, mapping_median_data=mapping_median_data, mapping_call=mapping_call, 
                                                        mapping_to_group=mapping_to_group, group_median_data=group_median_data, num_iter_each_addition=100,
                                                        panel_size=panel_size, num_subsample=num_subsample, na_str=na_str, use_parallel=use_parallel,
-                                                       max_fc_gene=max_fc_gene, qmin=qmin, seed=seed, current_panel=current_panel, 
+                                                       max_fc_gene=max_fc_gene, qmin=qmin, seed=seed, current_panel=current_panel, current_metric=current_metric,
                                                        panel_min=panel_min, verbose=verbose, corr_mapping=corr_mapping, 
                                                        optimize=optimize, group_distance=group_distance, 
                                                        cluster_genes=cluster_genes, dend=dend, percent_gene_subset=percent_gene_subset)
-    return current_panel
+    return current_panel, current_metric
 
 
 def _run_one_iter_parallel(map_data, group_call, mapping_call, num_subsample, seed, mapping_median_data,
                            other_genes, current_panel, group_distance,
                            mapping_to_group, corr_mapping, na_str='None'):
-    keep_sample = subsample_cells(mapping_call, num_subsample, seed)
+    keep_sample = subsample_cells(group_call, num_subsample, seed) # subsample from group_call
     map_data_iter = map_data.loc[:, keep_sample]
     group_call_iter = group_call.loc[keep_sample]
     match_count_iter = _run_one_iter(map_data_iter, mapping_median_data, other_genes, current_panel,
@@ -745,7 +751,8 @@ def filter_panel_genes(summary_expr, prop_expr=None, on_clusters=None, off_clust
 ### Post-hoc analysis
 
 def fraction_correct_with_genes(ordered_genes, map_data, median_data, cluster_call,
-                                verbose=False, plot=True, return_result=True, **kwargs):
+                                verbose=False, plot=True, return_result=True,
+                                add_text=True, **kwargs):
     num_gn = range(2, len(ordered_genes))
     frac = np.zeros(len(ordered_genes))
     
@@ -762,14 +769,14 @@ def fraction_correct_with_genes(ordered_genes, map_data, median_data, cluster_ca
         top_leaf_tmp = get_top_match(cor_map_tmp)
         
         # Calculate the fraction of matches where top_leaf_tmp matches cluster_call
-        frac[i] = 100 * np.mean(top_leaf_tmp.TopLeaf.values == cluster_call.values)
+        frac[i] = 100 * np.mean(top_leaf_tmp.top_leaf.values == cluster_call.values)
     
     # Handle any remaining NaN values in frac
     frac[np.isnan(frac)] = 0
     
     # Plotting the result if requested
     if plot:
-        ax = plot_correct_with_genes(frac, genes=ordered_genes, **kwargs)
+        ax = plot_correct_with_genes(frac, genes=ordered_genes, add_text=add_text, **kwargs)
     
     # Return the fraction array if requested
     if return_result and plot:
@@ -782,8 +789,8 @@ def fraction_correct_with_genes(ordered_genes, map_data, median_data, cluster_ca
 
 def plot_correct_with_genes(frac, genes=None, ax=None, xlabel="Number of genes in panel", 
                     title_text="All clusters gene panel", ylim=(-10, 100), 
-                    figsize=(10, 6), lwd=5, ylabel="Percent of nuclei correctly mapping", 
-                    color="grey", **kwargs):
+                    figsize=(10, 6), lwd=5, ylabel="Percent of cells correctly mapping", 
+                    color="grey", add_text=True, **kwargs):
     # If genes are not provided, use default names (in R, names(frac) is used)
     if genes is None:
         genes = [f"Gene_{i+1}" for i in range(len(frac))]
@@ -807,8 +814,9 @@ def plot_correct_with_genes(frac, genes=None, ax=None, xlabel="Number of genes i
     ax.axhline(y=0, color="black", linewidth=2)
 
     # Add text labels for the genes
-    for x, y, gene in zip(num_gn, frac, genes):
-        ax.text(x, y, gene, rotation=90, verticalalignment='bottom')
+    if add_text:
+        for x, y, gene in zip(num_gn, frac, genes):
+            ax.text(x, y, gene, rotation=90, verticalalignment='bottom')
 
     return ax
 
@@ -832,6 +840,7 @@ def plot_confusion_matrix(confusion_matrix, ax=None, title_text=None, cmap="viri
     ax.set_yticklabels(confusion_matrix.index);
     if title_text is not None:
         ax.set_title(title_text, fontsize=label_fontsize)
+
     return ax
 
 
