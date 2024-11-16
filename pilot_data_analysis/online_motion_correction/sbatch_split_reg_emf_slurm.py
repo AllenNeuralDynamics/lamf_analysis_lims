@@ -13,7 +13,7 @@ if __name__ == '__main__':
     #########################
     ##### Important parameter
     epoch_seconds = 10
-    num_planes = 8
+    num_planes = 2
 
 
 
@@ -23,12 +23,13 @@ if __name__ == '__main__':
 
     ####################
     # Choose python file 
-    python_dir = Path('/home/jinho.kim/Github/lamf_ophys_analysis_dev/qc/2p_data/online_motion_correction')  # noqa: E501
+    python_dir = Path('/home/jinho.kim/Github/lamf_ophys_analysis_dev/pilot_data_analysis/online_motion_correction')  # noqa: E501
     python_file = python_dir / 'split_reg_emf_slurm.py'
 
     ####################
     # Choose job_dir for saving the job records
-    job_dir = Path(r'\allen\programs\mindscope\workgroups\learning\pilots\online_motion_correction\mouse_726433\test_240531'.replace('\\', '/'))  # noqa: E501
+    # job_dir = Path(r'\allen\programs\mindscope\workgroups\learning\pilots\online_motion_correction\mouse_726433\test_240531'.replace('\\', '/'))  # noqa: E501
+    job_dir = Path(r'\allen\programs\mindscope\workgroups\learning\pilots\online_motion_correction\mouse_746542\1403914421'.replace('\\', '/'))  # noqa: E501
     stdout_location = job_dir / 'job_records'
     if not os.path.exists(stdout_location):
         print('making folder {}'.format(stdout_location))
@@ -68,7 +69,7 @@ if __name__ == '__main__':
 
             #####################
             # Argument string - need space between arguments
-            args_string = f'--file_path \"{fn}\" --plane_index {plane_index} --epoch_seconds {epoch_seconds}'
+            args_string = f'--file_path \"{fn}\" --plane_index {plane_index} --epoch_seconds {epoch_seconds} --num_planes {num_planes}'
             slurm.sbatch('{} {} {}'.format(
                         python_executable,
                         python_file,
