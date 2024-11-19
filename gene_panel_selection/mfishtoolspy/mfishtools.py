@@ -5,6 +5,7 @@ from scipy.stats import rankdata
 from scipy.stats import pearsonr
 from scipy.spatial.distance import cdist, pdist, squareform
 import matplotlib.pyplot as plt
+from matplotlib.colors import TwoSlopeNorm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from dask import delayed, compute
 from dask.distributed import Client
@@ -821,11 +822,43 @@ def plot_correct_with_genes(frac, genes=None, ax=None, xlabel="Number of genes i
     return ax
 
 
-def plot_confusion_matrix(confusion_matrix, ax=None, title_text=None, cmap="viridis",
+def plot_confusion_matrix_diff(confusion_matrix, ax=None, title_text=None, cmap="RdBu",
                           label_fontsize=20, figsize=(10, 10)):
+    
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
-    im = ax.imshow(confusion_matrix, cmap=cmap)
+    
+    max_val = np.abs(confusion_matrix).max().max()
+    norm = TwoSlopeNorm(vmin=-max_val, vcenter=0, vmax=max_val)
+
+
+    im = ax.imshow(confusion_matrix, cmap=cmap, norm=norm)
+    # add colorbar to the right, with the same height as the image
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="3%", pad=0.05)
+    cbar = plt.colorbar(im, cax=cax)
+    cbar.set_label('Proportion correct', fontsize=label_fontsize)
+
+    ax.set_xlabel(confusion_matrix.columns.name, fontsize=label_fontsize)
+    ax.set_ylabel(confusion_matrix.index.name, fontsize=label_fontsize)
+    ax.set_xticks(range(len(confusion_matrix.columns)))
+    ax.set_yticks(range(len(confusion_matrix.index)))
+    ax.set_xticklabels(confusion_matrix.columns, rotation=90)
+    ax.set_yticklabels(confusion_matrix.index);
+    if title_text is not None:
+        ax.set_title(title_text, fontsize=label_fontsize)
+
+    return ax
+
+
+def plot_confusion_matrix(confusion_matrix, ax=None, title_text=None, cmap="viridis",
+                          label_fontsize=20, figsize=(10, 10), imshow_max=None):
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    if imshow_max is None:
+        im = ax.imshow(confusion_matrix, cmap=cmap)
+    else:
+        im = ax.imshow(confusion_matrix, cmap=cmap, vmax=imshow_max)
     # add colorbar to the right, with the same height as the image
     divider = make_axes_locatable(ax)
     cax = divider.append_axes("right", size="3%", pad=0.05)
