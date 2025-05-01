@@ -150,15 +150,17 @@ def get_filenames(file_path):
 
     reg_filenames = list(data_dir.glob(f'{fn_stem}_*_reg.h5'))
     num_planes = len(reg_filenames)
-    assert num_planes = len(FOV_ORDER_DICT), f'Number of planes ({num_planes}) does not match FOV_ORDER_DICT ({len(FOV_ORDER_DICT)})'
+    assert num_planes == len(FOV_ORDER_DICT), f'Number of planes ({num_planes}) does not match FOV_ORDER_DICT ({len(FOV_ORDER_DICT)})'
     # check filename format
     reg_filenames_confirm = [data_dir / f'{fn_stem}_{pi:02}_reg.h5' for pi in range(num_planes)]
     assert reg_filenames == reg_filenames_confirm, f'Filename format mismatch: {reg_filenames} != {reg_filenames_confirm}'
     emf_filenames = [fn.parent / f'{fn.name.split("_reg")[0]}_emf.h5' for fn in reg_filenames]
     ops_filenames = [fn.parent / f'{fn.name.split("_reg")[0]}_ops.npy' for fn in reg_filenames]
+    split_filenames = [ref_fn.parent / f'{ref_fn.stem.split("_reg")[0]}.h5' for ref_fn in reg_filenames]
     assert np.all([fn.exists() for fn in emf_filenames]), f'Not all emf files exist: {emf_filenames}'
     assert np.all([fn.exists() for fn in ops_filenames]), f'Not all ops files exist: {ops_filenames}'
-    return reg_filenames, emf_filenames, ops_filenames
+    assert np.all([fn.exists() for fn in split_filenames]), f'Not all split files exist: {split_filenames}'
+    return reg_filenames, emf_filenames, ops_filenames, split_filenames
 
 
 ### Visualization
@@ -311,6 +313,118 @@ def check_data_filepath(file_path):
     return session_name, file_ind
 
 
+def wrapper_compare_mean_fov_zstack(emf_filenames, zstack_dir, im_adjust_percentiles=[0.02, 99.8]):
+    data_dir = emf_filenames[0].parent
+    file_stem = emf_filenames[0].stem
+
+    # top planes
+    plane_nums = [0, 1, 2, 3]
+    fig, axes = compare_mean_fov_zstack(emf_filenames, zstack_dir, plane_nums, im_adjust_percentiles)
+    save_fn = data_dir / f'{file_stem}_mean_fov_zstack_top.png'
+    fig.savefig(save_fn, dpi=300, transparent=False, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+
+    # bottom planes
+    plane_nums = [4, 5, 6, 7]
+    fig, axes = compare_mean_fov_zstack(emf_filenames, zstack_dir, plane_nums, im_adjust_percentiles)
+    save_fn = data_dir / f'{file_stem}_mean_fov_zstack_bottom.png'
+    fig.savefig(save_fn, dpi=300, transparent=False, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+
+
+def compare_mean_fov_zstack(emf_filenames,
+                            zstack_dir,
+                            plane_nums, 
+                            im_adjust_percentiles=[0.02, 99.8]):
+    fig, axes = plt.subplots(2, 4, figsize=(15, 7.5))
+    for pi in range(4):
+        plane_num = plane_nums[pi]
+        plane_ind = PLANE_ORDER[plane_num]
+
+        mimg = get_mean_image(emf_filenames[plane_ind])
+        zstack, matched_zstack_fn = get_zstack(zstack_dir, plane_ind)
+        zcenter = zstack[zstack.shape[0] //2]
+
+        axes[0, pi].imshow(mimg, cmap='gray',
+                        vmin=np.percentile(mimg, im_adjust_percentiles[0]),
+                        vmax=np.percentile(mimg, im_adjust_percentiles[1]))
+        title_str = f'Plane {plane_num} ({-PLANE_DEPTHS[plane_num]} um)'
+        title_str += '\nFOV mean image'
+        axes[0, pi].set_title(title_str, fontsize=15)
+        
+        axes[1, pi].imshow(zcenter, cmap='gray',
+                        vmin=np.percentile(zcenter, im_adjust_percentiles[0]),
+                        vmax=np.percentile(zcenter, im_adjust_percentiles[1]))
+        axes[1, pi].set_title('Z stack center slice', fontsize=15)
+    for ax in axes.flatten():
+        ax.axis('off')
+    return fig, axes
+
+
+def get_mean_image(emf_fn):
+    with h5py.File(emf_fn, 'r') as h:
+        mimg = h['data'][:].mean(axis=0)
+    return mimg
+
+
+def wrapper_compare_single_frame_zstack(split_filenames, zstack_dir, im_adjust_percentiles=[0.02, 99.8]):
+    data_dir = split_filenames[0].parent
+    file_stem = split_filenames[0].stem
+
+    # top planes
+    plane_nums = [0, 1, 2, 3]
+    fig, axes = compare_single_frame_zstack(split_filenames, zstack_dir, plane_nums, im_adjust_percentiles)
+    save_fn = data_dir / f'{file_stem}_single_frame_zstack_top.png'
+    fig.savefig(save_fn, dpi=300, transparent=False, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+
+    # bottom planes
+    plane_nums = [4, 5, 6, 7]
+    fig, axes = compare_single_frame_zstack(split_filenames, zstack_dir, plane_nums, im_adjust_percentiles)
+    save_fn = data_dir / f'{file_stem}_single_frame_zstack_bottom.png'
+    fig.savefig(save_fn, dpi=300, transparent=False, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+
+
+def compare_single_frame_zstack(split_filenames,
+                            zstack_dir,
+                            plane_nums, 
+                            im_adjust_percentiles=[0.02, 99.8]):
+    fig, axes = plt.subplots(2, 4, figsize=(15, 7.5))
+    for pi in range(4):
+        plane_num = plane_nums[pi]
+        plane_ind = PLANE_ORDER[plane_num]
+
+        mimg = get_single_frame(split_filenames[plane_ind])
+        zstack, matched_zstack_fn = get_zstack(zstack_dir, plane_ind)
+        zcenter = zstack[zstack.shape[0] //2]
+
+        axes[0, pi].imshow(mimg, cmap='gray',
+                        vmin=np.percentile(mimg, im_adjust_percentiles[0]),
+                        vmax=np.percentile(mimg, im_adjust_percentiles[1]))
+        title_str = f'Plane {plane_num} ({-PLANE_DEPTHS[plane_num]} um)'
+        title_str += '\nFOV single frame'
+        axes[0, pi].set_title(title_str, fontsize=15)
+        
+        axes[1, pi].imshow(zcenter, cmap='gray',
+                        vmin=np.percentile(zcenter, im_adjust_percentiles[0]),
+                        vmax=np.percentile(zcenter, im_adjust_percentiles[1]))
+        axes[1, pi].set_title('Z stack center slice', fontsize=15)
+    for ax in axes.flatten():
+        ax.axis('off')
+    return fig, axes
+
+
+def get_single_frame(split_fn, frame_ind=None):
+    with h5py.File(split_fn, 'r') as f:
+        if frame_ind is None:
+            center_ind = f['data'].shape[0] // 2
+            single_frame = f['data'][center_ind]
+        else:
+            single_frame = f['data'][frame_ind]
+    return single_frame
+
+
 if __name__ == '__main__':
     t0 = time.time()
     args = parser.parse_args()
@@ -329,7 +443,7 @@ if __name__ == '__main__':
         fig_title = fn_stem
     
     # get filenames
-    reg_filenames, emf_filenames, ops_filenames = get_filenames(file_path)
+    reg_filenames, emf_filenames, ops_filenames, split_filenames = get_filenames(file_path)
 
     # calculate zdrift posthoc (using dask)
     save_fn = data_dir / f'{fn_stem}_zdrift_results.npz'
@@ -347,15 +461,22 @@ if __name__ == '__main__':
         np.savez(save_fn, data=results_session)
         print(f'Saved z-drift results to {save_fn}')
 
-    # draw and save posthoc zdrift plot
-    plot_save_fn = data_dir / f'{fn_stem}_zdrift_posthoc.png'
-    plot_and_save_posthoc_zdrift(data_dir, results_session, plot_save_fn, session_title=fig_title)
+    # # draw and save posthoc zdrift plot
+    # plot_save_fn = data_dir / f'{fn_stem}_zdrift_posthoc.png'
+    # plot_and_save_posthoc_zdrift(data_dir, results_session, plot_save_fn, session_title=fig_title)
 
-    # draw and save omc zdrift plot
-    omc_save_fn = data_dir / f'{fn_stem}_omc_zdrift.png'
-    omc_motion_file_path = data_dir / f'{session_name}_timeseries_Motion_{file_ind:05}.csv'
-    plot_and_save_omc_zdrift(omc_motion_file_path, omc_save_fn, session_title=fig_title)
+    # # draw and save omc zdrift plot
+    # omc_save_fn = data_dir / f'{fn_stem}_omc_zdrift.png'
+    # omc_motion_file_path = data_dir / f'{session_name}_timeseries_Motion_{file_ind:05}.csv'
+    # plot_and_save_omc_zdrift(omc_motion_file_path, omc_save_fn, session_title=fig_title)
     
     print(f'Saved z-drift plots')
+
+    # draw and save images
+    wrapper_compare_mean_fov_zstack(emf_filenames, zstack_dir)
+    wrapper_compare_single_frame_zstack(split_filenames, zstack_dir)
+
+    print(f'Saved image comparison results.')
+
     dur = (time.time() - t0) / 60
     print(f'Calculation and plotting took {dur:.2f} min.')
