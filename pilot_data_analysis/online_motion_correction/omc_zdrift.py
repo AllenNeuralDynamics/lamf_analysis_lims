@@ -6,8 +6,6 @@ import numpy as np
 from glob import glob
 import h5py
 import cv2
-from dask import delayed, compute
-from dask.distributed import Client
 
 from argparse import ArgumentParser
 parser = ArgumentParser(description='arguments for offline mesoscope data splitting registration and EMF saving')
@@ -27,7 +25,20 @@ parser.add_argument(
 )
 
 
-def get_matched_zstack(emf_fn, ops_fn, zstack_dir, num_planes_around=60):
+def get_motion_range(ops_fn):
+    ops = np.load(ops_fn, allow_pickle=True).item()
+    y_offs = ops['reg_result'][4][0]
+    x_offs = ops['reg_result'][4][1]
+    assert max(y_offs) > 0
+    assert min(y_offs) < 0
+    assert max(x_offs) > 0
+    assert min(x_offs) < 0
+    range_y = [max(y_offs), min(y_offs)]
+    range_x = [max(x_offs), min(x_offs)]
+    return range_y, range_x
+
+
+def get_matched_zstack(emf_fn, ops_fn, zstack_dir, num_planes_around=40):
     ''' 
     
     
@@ -35,16 +46,9 @@ def get_matched_zstack(emf_fn, ops_fn, zstack_dir, num_planes_around=60):
     - Rolling average of z-stacks was not enough.
     '''
     ops = np.load(ops_fn, allow_pickle=True).item()
-    y_roll_bottom = np.min(ops['reg_result'][4][0])
-    y_roll_top = np.max(ops['reg_result'][4][0])
-    x_roll_right = np.min(ops['reg_result'][4][1])
-    x_roll_left = np.max(ops['reg_result'][4][1])
-    if y_roll_bottom >= 0:
-        y_roll_bottom = -1
-    if x_roll_right >= 0:
-        x_roll_right = -1
+    range_y, range_x = get_motion_range(ops_fn)
 
-    zstack_fn_list = glob(str(zstack_dir /'ophys_experiment_*_local_z_stack.tiff'))
+    zstack_fn_list = glob(str(zstack_dir /'*_local_z_stack*.tif*'))
     center_zstacks = []
     for zstack_fn in zstack_fn_list:
         zstack = tifffile.imread(zstack_fn)
@@ -52,9 +56,9 @@ def get_matched_zstack(emf_fn, ops_fn, zstack_dir, num_planes_around=60):
         new_zstack = rolling_average_zstack(zstack)
         center_ind = int(np.floor(new_zstack.shape[0]/2))
         center_zstack = new_zstack[center_ind - num_planes_around//2 : center_ind + num_planes_around//2+1]
-        center_zstack = center_zstack[:, y_roll_top:y_roll_bottom, x_roll_left:x_roll_right]
+        center_zstack = center_zstack[:, range_y[0] : range_y[1], range_x[0] : range_x[1]]
         center_zstacks.append(center_zstack)
-    first_emf = tifffile.imread(emf_fn)[0, y_roll_top:y_roll_bottom, x_roll_left:x_roll_right]    
+    first_emf = tifffile.imread(emf_fn)[0, range_y[0] : range_y[1], range_x[0] : range_x[1]]    
 
     corrcoef_zstack_finding = []
     tmat_zstack_finding = []
@@ -157,17 +161,10 @@ def get_correlation_after_reg(fov, zstack, use_clahe=True, sr_method='affine', t
 
 def calculate_zdrift(emf_fn, ops_fn, zstack_fn, tmat=None):
     ops = np.load(ops_fn, allow_pickle=True).item()
-    y_roll_top = np.max(ops['reg_result'][4][0])
-    y_roll_bottom = np.min(ops['reg_result'][4][0])    
-    x_roll_left = np.max(ops['reg_result'][4][1])
-    x_roll_right = np.min(ops['reg_result'][4][1])
-    if y_roll_bottom >= 0:
-        y_roll_bottom = -1
-    if x_roll_right >= 0:
-        x_roll_right = -1
+    range_y, range_x = get_motion_range(ops_fn)
 
-    emf = tifffile.imread(emf_fn)[:, y_roll_top:y_roll_bottom, x_roll_left:x_roll_right]
-    zstack = tifffile.imread(zstack_fn)[:, y_roll_top:y_roll_bottom, x_roll_left:x_roll_right]
+    emf = tifffile.imread(emf_fn)[:, range_y[0] : range_y[1], range_x[0] : range_x[1]]
+    zstack = tifffile.imread(zstack_fn)[:, range_y[0] : range_y[1], range_x[0] : range_x[1]]
     zstack = med_filt_z_stack(zstack)
     new_zstack = rolling_average_zstack(zstack)
     

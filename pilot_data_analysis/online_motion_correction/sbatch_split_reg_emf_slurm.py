@@ -13,7 +13,7 @@ if __name__ == '__main__':
     #########################
     ##### Important parameter
     epoch_seconds = 10
-    num_planes = 2
+    num_planes = 8
 
 
 
@@ -28,16 +28,15 @@ if __name__ == '__main__':
 
     ####################
     # Choose job_dir for saving the job records
-    # job_dir = Path(r'\allen\programs\mindscope\workgroups\learning\pilots\online_motion_correction\mouse_726433\test_240531'.replace('\\', '/'))  # noqa: E501
-    job_dir = Path(r'\allen\programs\mindscope\workgroups\learning\pilots\online_motion_correction\mouse_746542\1403914421'.replace('\\', '/'))  # noqa: E501
+    job_dir = Path(r'\allen\programs\mindscope\workgroups\learning\pilots\online_motion_correction\250425_783551'.replace('\\', '/'))  # noqa: E501
     stdout_location = job_dir / 'job_records'
     if not os.path.exists(stdout_location):
         print('making folder {}'.format(stdout_location))
         os.makedirs(stdout_location)
 
     #####################
-    fn_list = glob(str(job_dir / '*_timeseries_*.tif'))
-    emf_fn_list = glob(str(job_dir / '*_timeseries_*_emf.tif'))
+    fn_list = glob(str(job_dir / '*_timeseries*.tif*'))
+    emf_fn_list = glob(str(job_dir / '*_timeseries*_emf.tif*'))
     fn_list = [fn for fn in fn_list if fn not in emf_fn_list]
     # fn_list = [str(job_dir / '240515_721291_nomotioncorrection_timeseries_30min.tif')]
         

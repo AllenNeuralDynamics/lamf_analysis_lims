@@ -158,12 +158,9 @@ if __name__ == '__main__':
     si_metadata = _extract_dict_from_si_string(si_str)
     frame_rate = float(si_metadata['SI.hRoiManager.scanVolumeRate'])
 
-    client = Client()
+    with Client() as client:
+        tasks = [delayed(create_plane_h5_from_tiff)(data_fn, pi, num_pages, num_planes) for pi in range(num_planes)]
+        results = compute(*tasks, num_workers=num_threads)
 
-    tasks = [delayed(create_plane_h5_from_tiff)(data_fn, pi, num_pages, num_planes) for pi in range(num_planes)]
-    results = compute(*tasks, num_workers=num_threads)
-
-    tasks = [delayed(register_plane_and_save_emf)(h5_fn, frame_rate, epoch_minutes) for h5_fn in results]
-    compute(*tasks, num_workers=num_threads)
-
-    client.close()
+        tasks = [delayed(register_plane_and_save_emf)(h5_fn, frame_rate, epoch_minutes) for h5_fn in results]
+        compute(*tasks, num_workers=num_threads)
