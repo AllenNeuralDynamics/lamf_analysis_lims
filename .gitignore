@@ -1,2 +1,3 @@
 # ignore all dask .dirlock files
 *.dirlock
+pilot_data_analysis/online_motion_correction/__pycache__/*.pyc
