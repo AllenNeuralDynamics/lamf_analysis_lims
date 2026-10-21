@@ -78,6 +78,9 @@ def get_zdrift_results(emf_filenames, ops_filenames, zstack_dir, parallel=True):
 def wrapper_calculate_zdrift(plane_ind, emf_fn, ops_fn, zstack_dir):
     with h5py.File(emf_fn, 'r') as f:
         emf = f['data'][:]
+        epoch_seconds = f['epoch_seconds'][:]
+        num_epochs = f['num_epochs'][:]
+        assert num_epochs == emf.shape[0], f'num_epochs ({num_epochs}) does not match emf shape ({emf.shape[0]})'
     y_range, x_range = get_motion_range(ops_fn)
     zstack, matched_zstack_fn  = get_zstack(zstack_dir, plane_ind)
     
@@ -86,6 +89,7 @@ def wrapper_calculate_zdrift(plane_ind, emf_fn, ops_fn, zstack_dir):
     results['emf_fn'] = emf_fn
     results['ops_fn'] = ops_fn
     results['zstack_fn'] = matched_zstack_fn
+    results['epoch_seconds'] = epoch_seconds
     return results
 
 
@@ -145,6 +149,8 @@ def calculate_zdrift(zstack, emf, range_y, range_x,
 
 
 def get_filenames(file_path):
+    if isinstance(file_path, str):
+        file_path = Path(file_path)
     data_dir = file_path.parent
     fn_stem = file_path.stem
 
@@ -175,6 +181,14 @@ def plot_and_save_posthoc_zdrift(data_dir, results_session, save_fn, session_tit
     num_planes = len(PLANE_ORDER)
     assert len(results_session) == num_planes
 
+    # check number of epochs and epoch duration across results, and set timestamps
+    num_epochs = [len(r['matched_plane_indices']) for r in results_session]
+    assert np.all([ne == num_epochs[0] for ne in num_epochs]), f'Number of epochs mismatch: {num_epochs}'
+    epoch_duration = [r['epoch_seconds'] for r in results_session]
+    assert np.all([ed == epoch_duration[0] for ed in epoch_duration]), f'Epoch duration mismatch: {epoch_duration}'
+    epoch_duration = epoch_duration[0]
+    timestamps = np.arange(num_epochs[0]) * epoch_duration / 60  # in minutes
+
     # reorder results based on the PLANE_ORDER
     results_plane_inds = [r['plane_ind'] for r in results_session]
     results_ordered = []
@@ -189,8 +203,8 @@ def plot_and_save_posthoc_zdrift(data_dir, results_session, save_fn, session_tit
         mpi = r['matched_plane_indices']
         max_range = (np.max(r['matched_plane_indices'][1:]) - np.min(r['matched_plane_indices'][1:])) * 0.75
         max_cc = [max(cc) for cc in r['corrcoef']]
-        ax.plot(mpi, 'k-', label=f'Plane {i}')
-        im = ax.scatter(range(len(mpi)), mpi, c=max_cc, s=30, cmap='coolwarm', vmin=0.5, vmax=1, zorder=2)
+        ax.plot(timestamps, mpi, 'k-', label=f'Plane {i}')
+        im = ax.scatter(timestamps, mpi, c=max_cc, s=30, cmap='coolwarm', vmin=0.5, vmax=1, zorder=2)
         fov_depth = PLANE_DEPTHS[i]
         ax.set_title(f'Plane {i} ({-fov_depth} um)\nMotion range: {max_range:.2f} um', fontsize=15)
         if i % 4 == 0:
@@ -316,18 +330,20 @@ def check_data_filepath(file_path):
 def wrapper_compare_mean_fov_zstack(emf_filenames, zstack_dir, im_adjust_percentiles=[0.02, 99.8]):
     data_dir = emf_filenames[0].parent
     file_stem = emf_filenames[0].stem
+    fn_segments = file_stem.split('_')
+    save_fn_base = '_'.join(fn_segments[:-2])
 
     # top planes
     plane_nums = [0, 1, 2, 3]
     fig, axes = compare_mean_fov_zstack(emf_filenames, zstack_dir, plane_nums, im_adjust_percentiles)
-    save_fn = data_dir / f'{file_stem}_mean_fov_zstack_top.png'
+    save_fn = data_dir / f'{save_fn_base}_mean_fov_zstack_top.png'
     fig.savefig(save_fn, dpi=300, transparent=False, bbox_inches='tight', facecolor='white')
     plt.close(fig)
 
     # bottom planes
     plane_nums = [4, 5, 6, 7]
     fig, axes = compare_mean_fov_zstack(emf_filenames, zstack_dir, plane_nums, im_adjust_percentiles)
-    save_fn = data_dir / f'{file_stem}_mean_fov_zstack_bottom.png'
+    save_fn = data_dir / f'{save_fn_base}_mean_fov_zstack_bottom.png'
     fig.savefig(save_fn, dpi=300, transparent=False, bbox_inches='tight', facecolor='white')
     plt.close(fig)
 
@@ -370,18 +386,20 @@ def get_mean_image(emf_fn):
 def wrapper_compare_single_frame_zstack(split_filenames, zstack_dir, im_adjust_percentiles=[0.02, 99.8]):
     data_dir = split_filenames[0].parent
     file_stem = split_filenames[0].stem
+    fn_segments = file_stem.split('_')
+    save_fn_base = '_'.join(fn_segments[:-1])
 
     # top planes
     plane_nums = [0, 1, 2, 3]
     fig, axes = compare_single_frame_zstack(split_filenames, zstack_dir, plane_nums, im_adjust_percentiles)
-    save_fn = data_dir / f'{file_stem}_single_frame_zstack_top.png'
+    save_fn = data_dir / f'{save_fn_base}_single_frame_zstack_top.png'
     fig.savefig(save_fn, dpi=300, transparent=False, bbox_inches='tight', facecolor='white')
     plt.close(fig)
 
     # bottom planes
     plane_nums = [4, 5, 6, 7]
     fig, axes = compare_single_frame_zstack(split_filenames, zstack_dir, plane_nums, im_adjust_percentiles)
-    save_fn = data_dir / f'{file_stem}_single_frame_zstack_bottom.png'
+    save_fn = data_dir / f'{save_fn_base}_single_frame_zstack_bottom.png'
     fig.savefig(save_fn, dpi=300, transparent=False, bbox_inches='tight', facecolor='white')
     plt.close(fig)
 
@@ -461,9 +479,9 @@ if __name__ == '__main__':
         np.savez(save_fn, data=results_session)
         print(f'Saved z-drift results to {save_fn}')
 
-    # # draw and save posthoc zdrift plot
-    # plot_save_fn = data_dir / f'{fn_stem}_zdrift_posthoc.png'
-    # plot_and_save_posthoc_zdrift(data_dir, results_session, plot_save_fn, session_title=fig_title)
+    # draw and save posthoc zdrift plot
+    plot_save_fn = data_dir / f'{fn_stem}_zdrift_posthoc.png'
+    plot_and_save_posthoc_zdrift(data_dir, results_session, plot_save_fn, session_title=fig_title)
 
     # # draw and save omc zdrift plot
     # omc_save_fn = data_dir / f'{fn_stem}_omc_zdrift.png'
@@ -472,11 +490,11 @@ if __name__ == '__main__':
     
     print(f'Saved z-drift plots')
 
-    # draw and save images
-    wrapper_compare_mean_fov_zstack(emf_filenames, zstack_dir)
-    wrapper_compare_single_frame_zstack(split_filenames, zstack_dir)
+    # # draw and save images
+    # wrapper_compare_mean_fov_zstack(emf_filenames, zstack_dir)
+    # wrapper_compare_single_frame_zstack(split_filenames, zstack_dir)
 
-    print(f'Saved image comparison results.')
+    # print(f'Saved image comparison results.')
 
     dur = (time.time() - t0) / 60
     print(f'Calculation and plotting took {dur:.2f} min.')
